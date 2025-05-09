@@ -7,12 +7,10 @@ app.use(cors());
 app.use(express.json());
 
 // Налаштування підключення до PostgreSQL
+// postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua_7v96
 const pool = new Pool({
-  user: 'postgres',
-  host: 'localhost',
-  database: 'cosmetick_ua',
-  password: 'vlados1597',
-  port: 5432,
+  connectionString: process.env.DATABASE_URL || 'postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua',
+  ssl: { rejectUnauthorized: false },
 });
 
 // Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
@@ -265,7 +263,7 @@ app.get('/products/:id', async (req, res) => {
 });
 
 // Запуск сервера
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Сервер запущено на порту ${PORT}`);
 });
