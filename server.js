@@ -7,7 +7,6 @@ app.use(cors());
 app.use(express.json());
 
 // Налаштування підключення до PostgreSQL
-// postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua_7v96
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua',
   ssl: { rejectUnauthorized: false },
@@ -134,26 +133,17 @@ app.get('/products', async (req, res) => {
     }
 
     // Додавання умов до запиту
+    let whereClause = '';
     if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
+      whereClause = ` WHERE ${conditions.join(' AND ')}`;
+      query += whereClause;
     }
 
-    // Групування та пагінація
+    // Групування
     query += `
       GROUP BY p.id, c.name_ua, c.name_en, b.name, pd.description, pd.composition, pd.usage, pd.description_full,
                pf.brand, pf.country, pf.type, pf.class, pf.category, pf.purpose, pf.gender, pf.active_ingredients
     `;
-    
-    // Сортування: випадковий порядок, якщо random=true, інакше за id
-    query += (random === 'true') ? ` ORDER BY RANDOM()` : ` ORDER BY p.id`;
-    
-    query += `
-      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
-    `;
-    values.push(parseInt(limit), offset);
-
-    // Виконання основного запиту
-    const result = await pool.query(query, values);
 
     // Запит для підрахунку загальної кількості продуктів
     let countQuery = `
@@ -164,15 +154,55 @@ app.get('/products', async (req, res) => {
       LEFT JOIN product_details pd ON p.id = pd.product_id
       LEFT JOIN product_features pf ON p.id = pf.product_id
       LEFT JOIN store_prices sp ON p.id = sp.product_id
+      ${whereClause}
     `;
-    if (conditions.length > 0) {
-      countQuery += ` WHERE ${conditions.join(' AND ')}`;
+
+    // Для пошуку: отримати всі продукти для групування за категоріями
+    let searchResults = [];
+    if (search) {
+      const searchQuery = query + `
+        ORDER BY p.id
+      `;
+      const searchResult = await pool.query(searchQuery, values);
+      searchResults = searchResult.rows;
+    } else {
+      // Виконання основного запиту з пагінацією
+      query += (random === 'true') ? ` ORDER BY RANDOM()` : ` ORDER BY p.id`;
+      query += `
+        LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      `;
+      values.push(parseInt(limit), offset);
+      const result = await pool.query(query, values);
+      searchResults = result.rows;
     }
-    const countResult = await pool.query(countQuery, values.slice(0, -2));
+
+    // Виконання запиту для підрахунку
+    const countResult = await pool.query(countQuery, values.slice(0, search ? values.length : values.length - 2));
+
+    // Групування результатів за категоріями для пошуку
+    const groupedResults = searchResults.reduce((acc, product) => {
+      const category = acc.find((cat) => cat.category === product.category_id);
+      const productEntry = {
+        id: product.id,
+        name: product.name,
+        specs: { volume: product.volume || 'Н/Д' },
+      };
+      if (category) {
+        category.products.push(productEntry);
+        category.count += 1;
+      } else {
+        acc.push({
+          category: product.category_id,
+          products: [productEntry],
+          count: 1,
+        });
+      }
+      return acc;
+    }, []).sort((a, b) => b.count - a.count);
 
     // Форматування відповіді
     res.json({
-      products: result.rows.map(row => ({
+      products: searchResults.map(row => ({
         ...row,
         images: row.images || [],
         store_prices: row.store_prices || [],
@@ -191,6 +221,7 @@ app.get('/products', async (req, res) => {
         }
       })),
       total: parseInt(countResult.rows[0].total, 10),
+      groupedResults: search ? groupedResults : [],
     });
   } catch (err) {
     console.error('Помилка запиту /products:', err.stack);
@@ -254,7 +285,6 @@ app.get('/products/:id', async (req, res) => {
         description: result.rows[0].description
       }
     };
-    console.log('Product Response:', product); // Дебагування
     res.json(product);
   } catch (err) {
     console.error('Помилка запиту /products/:id:', err.stack);
