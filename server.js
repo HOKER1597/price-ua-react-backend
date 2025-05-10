@@ -157,9 +157,10 @@ app.get('/products', async (req, res) => {
       ${whereClause}
     `;
 
-    // Для пошуку: отримати всі продукти для групування за категоріями
+    // Виконання запитів
     let searchResults = [];
-    if (search) {
+    if (search || category) {
+      // Для пошуку або категорії: отримати всі продукти для групування
       const searchQuery = query + `
         ORDER BY p.id
       `;
@@ -177,9 +178,9 @@ app.get('/products', async (req, res) => {
     }
 
     // Виконання запиту для підрахунку
-    const countResult = await pool.query(countQuery, values.slice(0, search ? values.length : values.length - 2));
+    const countResult = await pool.query(countQuery, values.slice(0, search || category ? values.length : values.length - 2));
 
-    // Групування результатів за категоріями для пошуку
+    // Групування результатів за категоріями
     const groupedResults = searchResults.reduce((acc, product) => {
       const category = acc.find((cat) => cat.category === product.category_id);
       const productEntry = {
@@ -221,7 +222,7 @@ app.get('/products', async (req, res) => {
         }
       })),
       total: parseInt(countResult.rows[0].total, 10),
-      groupedResults: search ? groupedResults : [],
+      groupedResults: (search || category) ? groupedResults : [],
     });
   } catch (err) {
     console.error('Помилка запиту /products:', err.stack);
