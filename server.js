@@ -73,6 +73,37 @@ app.post('/categories', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для оновлення назви категорії
+app.put('/categories/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  const userId = req.user.id;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Назва категорії обов’язкова' });
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE saved_categories
+       SET name = $1
+       WHERE id = $2 AND user_id = $3
+       RETURNING id, name, created_at`,
+      [name.trim(), id, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Категорію не знайдено або ви не маєте доступу' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка оновлення категорії:', err.stack);
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: 'Помилка сервера' });
+    }
+  }
+});
+
 // Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
