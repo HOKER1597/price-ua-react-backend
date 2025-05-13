@@ -16,20 +16,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// Middleware для перевірки токена (з підтримкою необов’язкової авторизації)
+// Middleware для перевірки токена
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) {
-    req.user = null; // Якщо токена немає, продовжуємо без користувача
-    return next();
-  }
+  if (!token) return res.status(401).json({ error: 'Токен відсутній' });
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      req.user = null; // Недійсний токен, продовжуємо без користувача
-      return next();
-    }
+    if (err) return res.status(403).json({ error: 'Недійсний токен' });
     req.user = user;
     next();
   });
@@ -140,6 +134,26 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для масової перевірки збережених товарів
+app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
+  const { productIds } = req.body;
+  const userId = req.user.id;
+  try {
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.json({ savedProductIds: [] });
+    }
+    const result = await pool.query(
+      `SELECT product_id FROM saved_products WHERE user_id = $1 AND product_id = ANY($2)`,
+      [userId, productIds]
+    );
+    const savedProductIds = result.rows.map(row => row.product_id);
+    res.json({ savedProductIds });
+  } catch (err) {
+    console.error('Помилка масової перевірки збережених товарів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Ендпоінт для додавання товару до бажаного
 app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
@@ -183,7 +197,7 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
 });
 
 // Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
-app.get('/products', authenticateToken, async (req, res) => {
+app.get('/products', async (req, res) => {
   try {
     const {
       page = 1,
@@ -315,16 +329,6 @@ app.get('/products', authenticateToken, async (req, res) => {
       ${whereClause}
     `;
 
-    // Fetch saved products if user is authenticated
-    let savedProductIds = [];
-    if (req.user) {
-      const savedResult = await pool.query(
-        `SELECT product_id FROM saved_products WHERE user_id = $1`,
-        [req.user.id]
-      );
-      savedProductIds = savedResult.rows.map(row => row.product_id);
-    }
-
     let searchResults = [];
     if (search || category) {
       const searchQuery = query + `
@@ -385,7 +389,6 @@ app.get('/products', authenticateToken, async (req, res) => {
       })),
       total: parseInt(countResult.rows[0].total, 10),
       groupedResults: (search || category) ? groupedResults : [],
-      savedProductIds: savedProductIds // Include saved product IDs in response
     });
   } catch (err) {
     console.error('Помилка запиту /products:', err.stack);
