@@ -104,6 +104,27 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для видалення категорії
+app.delete('/categories/:id', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `DELETE FROM saved_categories
+       WHERE id = $1 AND user_id = $2
+       RETURNING id`,
+      [id, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Категорію не знайдено або ви не маєте доступу' });
+    }
+    res.json({ message: 'Категорію видалено' });
+  } catch (err) {
+    console.error('Помилка видалення категорії:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
