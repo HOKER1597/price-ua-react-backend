@@ -118,6 +118,64 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для перевірки, чи товар збережено
+app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
+  const { productId } = req.params;
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `SELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
+      [userId, productId]
+    );
+    res.json({ isSaved: result.rows.length > 0 });
+  } catch (err) {
+    console.error('Помилка перевірки збереженого товару:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для додавання товару до бажаного
+app.post('/saved-products', authenticateToken, async (req, res) => {
+  const { productId } = req.body;
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `INSERT INTO saved_products (user_id, product_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING
+       RETURNING id`,
+      [userId, productId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Товар уже додано до бажаного' });
+    }
+    res.json({ message: 'Товар додано до бажаного' });
+  } catch (err) {
+    console.error('Помилка додавання до бажаного:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для видалення товару з бажаного
+app.delete('/saved-products/:productId', authenticateToken, async (req, res) => {
+  const { productId } = req.params;
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `DELETE FROM saved_products WHERE user_id = $1 AND product_id = $2
+       RETURNING id`,
+      [userId, productId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Товар не знайдено у бажаному' });
+    }
+    res.json({ message: 'Товар видалено з бажаного' });
+  } catch (err) {
+    console.error('Помилка видалення з бажаного:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
 app.get('/products', async (req, res) => {
   try {
