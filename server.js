@@ -272,11 +272,14 @@ app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
     const result = await pool.query(
-      `SELECT product_id FROM saved_products WHERE user_id = $1`,
+      `SELECT product_id, saved_category_id FROM saved_products WHERE user_id = $1`,
       [userId]
     );
-    const savedProductIds = result.rows.map(row => row.product_id);
-    res.json({ savedProductIds });
+    const savedProducts = result.rows.map(row => ({
+      product_id: row.product_id,
+      saved_category_id: row.saved_category_id
+    }));
+    res.json({ savedProducts });
   } catch (err) {
     console.error('Помилка отримання збережених товарів:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
