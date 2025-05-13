@@ -29,6 +29,50 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Ендпоінт для отримання всіх категорій користувача
+app.get('/categories', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `SELECT id, name, created_at
+       FROM saved_categories
+       WHERE user_id = $1
+       ORDER BY created_at ASC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання категорій:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для створення нової категорії
+app.post('/categories', authenticateToken, async (req, res) => {
+  const { name } = req.body;
+  const userId = req.user.id;
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Назва категорії обов’язкова' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO saved_categories (user_id, name)
+       VALUES ($1, $2)
+       RETURNING id, name, created_at`,
+      [userId, name.trim()]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка створення категорії:', err.stack);
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: 'Помилка сервера' });
+    }
+  }
+});
+
 // Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
