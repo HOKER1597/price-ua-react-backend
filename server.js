@@ -134,6 +134,22 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для отримання всіх збережених товарів користувача
+app.get('/saved-products', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `SELECT product_id FROM saved_products WHERE user_id = $1`,
+      [userId]
+    );
+    const savedProductIds = result.rows.map(row => row.product_id);
+    res.json({ savedProductIds });
+  } catch (err) {
+    console.error('Помилка отримання збережених товарів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Ендпоінт для масової перевірки збережених товарів
 app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   const { productIds } = req.body;
