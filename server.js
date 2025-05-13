@@ -125,6 +125,43 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Ендпоінт для оновлення категорії товару
+app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
+  const { productId } = req.params;
+  const { saved_category_id } = req.body;
+  const userId = req.user.id;
+
+  try {
+    // Verify the category belongs to the user (if provided)
+    if (saved_category_id) {
+      const categoryCheck = await pool.query(
+        `SELECT id FROM saved_categories WHERE id = $1 AND user_id = $2`,
+        [saved_category_id, userId]
+      );
+      if (categoryCheck.rows.length === 0) {
+        return res.status(403).json({ error: 'Категорія не належить користувачу' });
+      }
+    }
+
+    const result = await pool.query(
+      `UPDATE saved_products
+       SET saved_category_id = $1
+       WHERE product_id = $2 AND user_id = $3
+       RETURNING product_id, saved_category_id`,
+      [saved_category_id || null, productId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Товар не знайдено у бажаному' });
+    }
+
+    res.json({ message: 'Категорію товару оновлено', saved_category_id: result.rows[0].saved_category_id });
+  } catch (err) {
+    console.error('Помилка оновлення категорії товару:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
