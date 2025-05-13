@@ -113,37 +113,15 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
-// Modified endpoint to fetch full product details
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
-    const result = await pool.query(`
-      SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
-             c.name_ua AS category_name, c.name_en AS category_id, b.name AS brand_name,
-             pd.description,
-             array_agg(DISTINCT pi.image_url) FILTER (WHERE pi.image_url IS NOT NULL) AS images,
-             (SELECT json_agg(json_build_object(
-               'store_id', sp.store_id,
-               'name', s.name,
-               'price', sp.price,
-               'logo', s.logo,
-               'yearsWithUs', s.years_with_us,
-               'delivery', 'по Києву',
-               'link', sp.link
-             )) FILTER (WHERE sp.id IS NOT NULL)
-              FROM store_prices sp
-              JOIN stores s ON sp.store_id = s.id
-              WHERE sp.product_id = p.id) AS store_prices
-      FROM saved_products sp
-      JOIN products p ON sp.product_id = p.id
-      JOIN categories c ON p.category_id = c.id
-      JOIN brands b ON p.brand_id = b.id
-      LEFT JOIN product_details pd ON p.id = pd.product_id
-      LEFT JOIN product_images pi ON p.id = pi.product_id
-      WHERE sp.user_id = $1
-      GROUP BY p.id, c.name_ua, c.name_en, b.name, pd.description
-    `, [userId]);
-    res.json({ products: result.rows });
+    const result = await pool.query(
+      `SELECT product_id FROM saved_products WHERE user_id = $1`,
+      [userId]
+    );
+    const savedProductIds = result.rows.map(row => row.product_id);
+    res.json({ savedProductIds });
   } catch (err) {
     console.error('Помилка отримання списку збережених товарів:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
@@ -205,22 +183,21 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-// New endpoints for wishlist categories
-app.get('/wishlist-categories', authenticateToken, async (req, res) => {
+app.get('/saved-categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
     const result = await pool.query(
-      `SELECT id, name FROM wishlist_categories WHERE user_id = $1`,
+      `SELECT id, name FROM saved_categories WHERE user_id = $1`,
       [userId]
     );
     res.json({ categories: result.rows });
   } catch (err) {
-    console.error('Помилка отримання категорій:', err.stack);
+    console.error('Помилка отримання категорій бажаного:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
   }
 });
 
-app.post('/wishlist-categories', authenticateToken, async (req, res) => {
+app.post('/saved-categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
   try {
@@ -228,7 +205,7 @@ app.post('/wishlist-categories', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Назва категорії обов’язкова' });
     }
     const result = await pool.query(
-      `INSERT INTO wishlist_categories (user_id, name)
+      `INSERT INTO saved_categories (user_id, name)
        VALUES ($1, $2)
        RETURNING id, name`,
       [userId, name]
@@ -236,12 +213,16 @@ app.post('/wishlist-categories', authenticateToken, async (req, res) => {
     res.json({ category: result.rows[0] });
   } catch (err) {
     console.error('Помилка створення категорії:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: 'Помилка сервера' });
+    }
   }
 });
 
-app.patch('/wishlist-categories/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+app.put('/saved-categories/:categoryId', authenticateToken, async (req, res) => {
+  const { categoryId } = req.params;
   const { name } = req.body;
   const userId = req.user.id;
   try {
@@ -249,11 +230,11 @@ app.patch('/wishlist-categories/:id', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Назва категорії обов’язкова' });
     }
     const result = await pool.query(
-      `UPDATE wishlist_categories
+      `UPDATE saved_categories
        SET name = $1
        WHERE id = $2 AND user_id = $3
        RETURNING id, name`,
-      [name, id, userId]
+      [name, categoryId, userId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Категорію не знайдено' });
@@ -261,19 +242,23 @@ app.patch('/wishlist-categories/:id', authenticateToken, async (req, res) => {
     res.json({ category: result.rows[0] });
   } catch (err) {
     console.error('Помилка оновлення категорії:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: 'Помилка сервера' });
+    }
   }
 });
 
-app.delete('/wishlist-categories/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+app.delete('/saved-categories/:categoryId', authenticateToken, async (req, res) => {
+  const { categoryId } = req.params;
   const userId = req.user.id;
   try {
     const result = await pool.query(
-      `DELETE FROM wishlist_categories
+      `DELETE FROM saved_categories
        WHERE id = $1 AND user_id = $2
        RETURNING id`,
-      [id, userId]
+      [categoryId, userId]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Категорію не знайдено' });
@@ -299,7 +284,8 @@ app.get('/products', async (req, res) => {
       volumes,
       types,
       random,
-      hasRating
+      hasRating,
+      ids,
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -333,6 +319,12 @@ app.get('/products', async (req, res) => {
 
     const conditions = [];
     const values = [];
+
+    if (ids) {
+      const idList = ids.split(',').map(Number);
+      conditions.push(`p.id = ANY($${values.length + 1})`);
+      values.push(idList);
+    }
 
     if (search) {
       conditions.push(`p.name ILIKE $${values.length + 1}`);
@@ -417,7 +409,7 @@ app.get('/products', async (req, res) => {
     `;
 
     let searchResults = [];
-    if (search || category) {
+    if (search || category || ids) {
       const searchQuery = query + `
         ORDER BY p.id
       `;
@@ -433,7 +425,7 @@ app.get('/products', async (req, res) => {
       searchResults = result.rows;
     }
 
-    const countResult = await pool.query(countQuery, values.slice(0, search || category ? values.length : values.length - 2));
+    const countResult = await pool.query(countQuery, values.slice(0, search || category || ids ? values.length : values.length - 2));
 
     const groupedResults = searchResults.reduce((acc, product) => {
       const category = acc.find((cat) => cat.category === product.category_id);
