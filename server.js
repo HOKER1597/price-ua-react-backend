@@ -1,4 +1,3 @@
-
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -114,6 +113,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
+// New endpoint to fetch all saved product IDs
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -184,93 +184,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-app.get('/saved-categories', authenticateToken, async (req, res) => {
-  const userId = req.user.id;
-  try {
-    const result = await pool.query(
-      `SELECT id, name FROM saved_categories WHERE user_id = $1`,
-      [userId]
-    );
-    res.json({ categories: result.rows });
-  } catch (err) {
-    console.error('Помилка отримання категорій бажаного:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
-app.post('/saved-categories', authenticateToken, async (req, res) => {
-  const { name } = req.body;
-  const userId = req.user.id;
-  try {
-    if (!name) {
-      return res.status(400).json({ error: 'Назва категорії обов’язкова' });
-    }
-    const result = await pool.query(
-      `INSERT INTO saved_categories (user_id, name)
-       VALUES ($1, $2)
-       RETURNING id, name`,
-      [userId, name]
-    );
-    res.json({ category: result.rows[0] });
-  } catch (err) {
-    console.error('Помилка створення категорії:', err.stack);
-    if (err.code === '23505') {
-      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
-    } else {
-      res.status(500).json({ error: 'Помилка сервера' });
-    }
-  }
-});
-
-app.put('/saved-categories/:categoryId', authenticateToken, async (req, res) => {
-  const { categoryId } = req.params;
-  const { name } = req.body;
-  const userId = req.user.id;
-  try {
-    if (!name) {
-      return res.status(400).json({ error: 'Назва категорії обов’язкова' });
-    }
-    const result = await pool.query(
-      `UPDATE saved_categories
-       SET name = $1
-       WHERE id = $2 AND user_id = $3
-       RETURNING id, name`,
-      [name, categoryId, userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Категорію не знайдено' });
-    }
-    res.json({ category: result.rows[0] });
-  } catch (err) {
-    console.error('Помилка оновлення категорії:', err.stack);
-    if (err.code === '23505') {
-      res.status(400).json({ error: 'Категорія з такою назвою вже існує' });
-    } else {
-      res.status(500).json({ error: 'Помилка сервера' });
-    }
-  }
-});
-
-app.delete('/saved-categories/:categoryId', authenticateToken, async (req, res) => {
-  const { categoryId } = req.params;
-  const userId = req.user.id;
-  try {
-    const result = await pool.query(
-      `DELETE FROM saved_categories
-       WHERE id = $1 AND user_id = $2
-       RETURNING id`,
-      [categoryId, userId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Категорію не знайдено' });
-    }
-    res.json({ message: 'Категорію видалено' });
-  } catch (err) {
-    console.error('Помилка видалення категорії:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
 app.get('/products', async (req, res) => {
   try {
     const {
@@ -285,8 +198,7 @@ app.get('/products', async (req, res) => {
       volumes,
       types,
       random,
-      hasRating,
-      ids,
+      hasRating
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -320,12 +232,6 @@ app.get('/products', async (req, res) => {
 
     const conditions = [];
     const values = [];
-
-    if (ids) {
-      const idList = ids.split(',').map(Number);
-      conditions.push(`p.id = ANY($${values.length + 1})`);
-      values.push(idList);
-    }
 
     if (search) {
       conditions.push(`p.name ILIKE $${values.length + 1}`);
@@ -410,7 +316,7 @@ app.get('/products', async (req, res) => {
     `;
 
     let searchResults = [];
-    if (search || category || ids) {
+    if (search || category) {
       const searchQuery = query + `
         ORDER BY p.id
       `;
@@ -426,7 +332,7 @@ app.get('/products', async (req, res) => {
       searchResults = result.rows;
     }
 
-    const countResult = await pool.query(countQuery, values.slice(0, search || category || ids ? values.length : values.length - 2));
+    const countResult = await pool.query(countQuery, values.slice(0, search || category ? values.length : values.length - 2));
 
     const groupedResults = searchResults.reduce((acc, product) => {
       const category = acc.find((cat) => cat.category === product.category_id);
