@@ -176,7 +176,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-
 // Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
 app.get('/products', async (req, res) => {
   try {
