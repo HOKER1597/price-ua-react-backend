@@ -16,14 +16,20 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// Middleware для перевірки токена
+// Middleware для перевірки токена (з підтримкою необов’язкової авторизації)
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Токен відсутній' });
+  if (!token) {
+    req.user = null; // Якщо токена немає, продовжуємо без користувача
+    return next();
+  }
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Недійсний токен' });
+    if (err) {
+      req.user = null; // Недійсний токен, продовжуємо без користувача
+      return next();
+    }
     req.user = user;
     next();
   });
@@ -177,7 +183,7 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
 });
 
 // Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
-app.get('/products', async (req, res) => {
+app.get('/products', authenticateToken, async (req, res) => {
   try {
     const {
       page = 1,
@@ -309,6 +315,16 @@ app.get('/products', async (req, res) => {
       ${whereClause}
     `;
 
+    // Fetch saved products if user is authenticated
+    let savedProductIds = [];
+    if (req.user) {
+      const savedResult = await pool.query(
+        `SELECT product_id FROM saved_products WHERE user_id = $1`,
+        [req.user.id]
+      );
+      savedProductIds = savedResult.rows.map(row => row.product_id);
+    }
+
     let searchResults = [];
     if (search || category) {
       const searchQuery = query + `
@@ -369,6 +385,7 @@ app.get('/products', async (req, res) => {
       })),
       total: parseInt(countResult.rows[0].total, 10),
       groupedResults: (search || category) ? groupedResults : [],
+      savedProductIds: savedProductIds // Include saved product IDs in response
     });
   } catch (err) {
     console.error('Помилка запиту /products:', err.stack);
