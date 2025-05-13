@@ -8,15 +8,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Змініть на безпечний ключ у продакшені
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
 
-// Налаштування підключення до PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua',
   ssl: { rejectUnauthorized: false },
 });
 
-// Middleware для перевірки токена
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -29,7 +27,6 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
   try {
@@ -58,7 +55,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Ендпоінт для входу
 app.post('/login', async (req, res) => {
   const { identifier, password } = req.body;
   try {
@@ -89,7 +85,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення даних користувача
 app.post('/update-user', authenticateToken, async (req, res) => {
   const { email, gender, birth_date } = req.body;
   const userId = req.user.id;
@@ -118,7 +113,22 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для перевірки, чи товар збережено
+// New endpoint to fetch all saved product IDs
+app.get('/saved-products', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const result = await pool.query(
+      `SELECT product_id FROM saved_products WHERE user_id = $1`,
+      [userId]
+    );
+    const savedProductIds = result.rows.map(row => row.product_id);
+    res.json({ savedProductIds });
+  } catch (err) {
+    console.error('Помилка отримання списку збережених товарів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -134,7 +144,6 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для додавання товару до бажаного
 app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   const userId = req.user.id;
@@ -156,7 +165,6 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення товару з бажаного
 app.delete('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -176,7 +184,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-// Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
 app.get('/products', async (req, res) => {
   try {
     const {
@@ -253,8 +260,7 @@ app.get('/products', async (req, res) => {
         )
       `);
       values.push(parseFloat(priceFrom), parseFloat(priceTo));
-    }
-    else if (priceRanges) {
+    } else if (priceRanges) {
       const ranges = priceRanges.split(',');
       const rangeConditions = ranges.map((range, index) => {
         const [min, max] = range.includes('+') ? [1000, Infinity] : range.split('-').map(Number);
@@ -376,7 +382,6 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання деталей продукту
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -439,7 +444,6 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
-// Запуск сервера
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Сервер запущено на порту ${PORT}`);
