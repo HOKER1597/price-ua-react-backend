@@ -65,60 +65,33 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// Ендпоінт для отримання всіх категорій
-app.get('/categories', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання категорій:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
-// Ендпоінт для отримання всіх брендів
-app.get('/brands', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання брендів:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
-// Ендпоінт для отримання всіх магазинів
-app.get('/stores', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT id, name, logo, years_with_us, link FROM stores ORDER BY name ASC');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання магазинів:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
 // Ендпоінт для створення нового товару
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const { category_id, brand_id, name, rating, views, code, description, description_full, composition, usage } = req.body;
-    const features = [];
+    const {
+      category_id,
+      brand_id,
+      name,
+      volume,
+      rating,
+      views,
+      code,
+      description,
+      description_full,
+      composition,
+      usage,
+      features: featuresJson,
+    } = req.body;
+
+    const features = JSON.parse(featuresJson || '{}');
     const store_prices = [];
 
-    // Парсинг features та store_prices з FormData
+    // Парсинг store_prices з FormData
     Object.keys(req.body).forEach((key) => {
-      if (key.startsWith('features[')) {
-        const match = key.match(/features\[(\d+)\]\[(\w+)\]/);
-        if (match) {
-          const index = parseInt(match[1]);
-          const field = match[2];
-          if (!features[index]) features[index] = {};
-          features[index][field] = req.body[key];
-        }
-      } else if (key.startsWith('store_prices[')) {
+      if (key.startsWith('store_prices[')) {
         const match = key.match(/store_prices\[(\d+)\]\[(\w+)\]/);
         if (match) {
           const index = parseInt(match[1]);
@@ -131,10 +104,19 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     // Вставка в таблицю products
     const productResult = await client.query(
-      `INSERT INTO products (category_id, brand_id, name, rating, views, code)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO products (category_id, brand_id, name, volume, type, rating, views, code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [category_id, brand_id, name, rating || null, views || 0, code || null]
+      [
+        category_id,
+        brand_id,
+        name,
+        volume || null,
+        features.type || null,
+        rating || null,
+        views || 0,
+        code || null,
+      ]
     );
     const productId = productResult.rows[0].id;
 
@@ -169,14 +151,23 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     );
 
     // Вставка характеристик товару
-    for (const feature of features) {
-      if (feature.key && feature.value) {
-        await client.query(
-          `INSERT INTO product_features (product_id, ${feature.key})
-           VALUES ($1, $2)`,
-          [productId, feature.value]
-        );
-      }
+    if (Object.keys(features).length > 0) {
+      const featureFields = [
+        'brand',
+        'country',
+        'type',
+        'class',
+        'category',
+        'purpose',
+        'gender',
+        'active_ingredients',
+      ];
+      const featureValues = featureFields.map((field) => features[field] || null);
+      await client.query(
+        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose, gender, active_ingredients)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [productId, ...featureValues]
+      );
     }
 
     // Вставка цін у магазинах
@@ -201,8 +192,38 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   }
 });
 
-// Решта ендпоінтів залишаються без змін
-// Ендпоінт для завантаження зображень у Cloudinary
+// Решта ендпоінтів (без змін)
+app.get('/categories', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання категорій:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.get('/brands', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання брендів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.get('/stores', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, logo, link FROM stores ORDER BY name ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання магазинів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Додаткові ендпоінти (з попередньої версії) залишаються без змін
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -233,7 +254,6 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
   }
 });
 
-// Ендпоінт для завантаження аватарки користувача
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
@@ -289,7 +309,6 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
   }
 });
 
-// Ендпоінт для отримання всіх категорій користувача
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -307,7 +326,6 @@ app.get('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для створення нової категорії
 app.post('/categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
@@ -333,7 +351,6 @@ app.post('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення назви категорії
 app.put('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
@@ -364,7 +381,6 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення категорії
 app.delete('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
@@ -385,7 +401,6 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення категорії товару
 app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const { saved_category_id } = req.body;
@@ -421,7 +436,6 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для реєстрації
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
   try {
@@ -450,7 +464,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Ендпоінт для входу
 app.post('/login', async (req, res) => {
   const { identifier, password } = req.body;
   try {
@@ -481,7 +494,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення даних користувача
 app.post('/update-user', authenticateToken, async (req, res) => {
   const { email, gender, birth_date } = req.body;
   const userId = req.user.id;
@@ -510,7 +522,6 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для перевірки, чи товар збережено
 app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -526,7 +537,6 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання всіх збережених товарів користувача
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -545,7 +555,6 @@ app.get('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для масової перевірки збережених товарів
 app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   const { productIds } = req.body;
   const userId = req.user.id;
@@ -565,7 +574,6 @@ app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для додавання товару до бажаного
 app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   const userId = req.user.id;
@@ -587,7 +595,6 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення товару з бажаного
 app.delete('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -607,7 +614,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-// Ендпоінт для отримання списку продуктів із пагінацією та фільтрами
 app.get('/products', async (req, res) => {
   try {
     const {
@@ -639,7 +645,6 @@ app.get('/products', async (req, res) => {
                'name', s.name,
                'price', sp.price,
                'logo', s.logo,
-               'yearsWithUs', s.years_with_us,
                'delivery', 'по Києву',
                'link', sp.link
              )) FILTER (WHERE sp.id IS NOT NULL)
@@ -807,7 +812,6 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання деталей продукту
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -823,7 +827,6 @@ app.get('/products/:id', async (req, res) => {
                'name', s.name,
                'price', sp.price,
                'logo', s.logo,
-               'yearsWithUs', s.years_with_us,
                'delivery', 'по Києву',
                'link', sp.link
              )) FILTER (WHERE sp.id IS NOT NULL)
@@ -870,7 +873,6 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
-// Запуск сервера
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Сервер запущено на порту ${PORT}`);
