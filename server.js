@@ -119,10 +119,18 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     });
     console.log('Ціни магазинів:', store_prices);
 
-    // Перевірка максимального ID у таблиці products
+    // Перевірка максимального ID і синхронізація послідовності
     const maxIdResult = await client.query('SELECT MAX(id) FROM products');
     const maxId = maxIdResult.rows[0].max || 0;
     console.log('Максимальний ID у products:', { maxId });
+
+    // Синхронізувати послідовність
+    const seqResult = await client.query(
+      "SELECT setval('products_id_seq', COALESCE($1, 0) + 1, false) AS seq_value",
+      [maxId]
+    );
+    const nextId = parseInt(seqResult.rows[0].seq_value);
+    console.log('Послідовність products_id_seq синхронізовано:', { nextId });
 
     // Вставка в таблицю products
     const productResult = await client.query(
@@ -211,7 +219,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     // Вставка цін у магазинах
     if (store_prices.length > 0) {
       for (const store of store_prices) {
-        if (store.store_id && store.price) {
+        if (store && store.store_id && store.price) {
           await client.query(
             `INSERT INTO store_prices (product_id, store_id, price, link)
              VALUES ($1, $2, $3, $4)`,
@@ -240,20 +248,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       code: err.code,
       constraint: err.constraint,
     });
-    if (err.code === '23505' && err.constraint === 'products_pkey') {
-      // Спроба синхронізувати послідовність
-      try {
-        await client.query("SELECT setval('products_id_seq', COALESCE((SELECT MAX(id) FROM products), 0), true)");
-        console.log('Послідовність products_id_seq синхронізовано');
-      } catch (seqErr) {
-        console.error('Помилка синхронізації послідовності:', seqErr.stack);
-      }
-      res.status(500).json({
-        error: 'Помилка: конфлікт ID товару. Спробуйте ще раз або зверніться до адміністратора.',
-      });
-    } else {
-      res.status(500).json({ error: `Помилка сервера: ${err.message}` });
-    }
+    res.status(500).json({ error: `Помилка сервера: ${err.message}` });
   } finally {
     client.release();
     console.log('Клієнт бази даних звільнено');
