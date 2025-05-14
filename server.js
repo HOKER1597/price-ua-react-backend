@@ -119,13 +119,10 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     });
     console.log('Ціни магазинів:', store_prices);
 
-    // Перевірка поточного значення послідовності
-    const seqResult = await client.query("SELECT currval('products_id_seq')");
+    // Перевірка максимального ID у таблиці products
     const maxIdResult = await client.query('SELECT MAX(id) FROM products');
-    console.log('Послідовність і максимальний ID:', {
-      currentSequence: seqResult.rows[0].currval,
-      maxId: maxIdResult.rows[0].max || 0,
-    });
+    const maxId = maxIdResult.rows[0].max || 0;
+    console.log('Максимальний ID у products:', { maxId });
 
     // Вставка в таблицю products
     const productResult = await client.query(
@@ -244,11 +241,18 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       constraint: err.constraint,
     });
     if (err.code === '23505' && err.constraint === 'products_pkey') {
+      // Спроба синхронізувати послідовність
+      try {
+        await client.query("SELECT setval('products_id_seq', COALESCE((SELECT MAX(id) FROM products), 0), true)");
+        console.log('Послідовність products_id_seq синхронізовано');
+      } catch (seqErr) {
+        console.error('Помилка синхронізації послідовності:', seqErr.stack);
+      }
       res.status(500).json({
-        error: 'Помилка: конфлікт ID товару. Перевірте послідовність products_id_seq або зверніться до адміністратора.',
+        error: 'Помилка: конфлікт ID товару. Спробуйте ще раз або зверніться до адміністратора.',
       });
     } else {
-      res.status(500).json({ error: 'Помилка сервера' });
+      res.status(500).json({ error: `Помилка сервера: ${err.message}` });
     }
   } finally {
     client.release();
