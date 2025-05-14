@@ -30,7 +30,7 @@ const upload = multer({
   },
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fc0432fb054d94da265cd6e565721b49f66d7a447cdaa76fe30d0214bf20b24220179d3fcd5eea298bedbead28c2636f3ca65baf668cd89ad679ef99b36f43db'; // Змініть на безпечний ключ у продакшені
+const JWT_SECRET = process.env.JWT_SECRET || 'fc0432fb054d94da265cd6e565721b49f66d7a447cdaa76fe30d0214bf20b24220179d3fcd5eea298bedbead28c2636f3ca65baf668cd89ad679ef99b36f43db';
 
 // Налаштування підключення до PostgreSQL
 const pool = new Pool({
@@ -51,6 +51,157 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Middleware для перевірки адмінських прав
+const isAdmin = async (req, res, next) => {
+  try {
+    const result = await pool.query('SELECT is_admin FROM users WHERE id = $1', [req.user.id]);
+    if (result.rows.length === 0 || !result.rows[0].is_admin) {
+      return res.status(403).json({ error: 'Доступ дозволено лише адміністраторам' });
+    }
+    next();
+  } catch (err) {
+    console.error('Помилка перевірки адмінських прав:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+};
+
+// Ендпоінт для отримання всіх категорій
+app.get('/categories', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання категорій:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для отримання всіх брендів
+app.get('/brands', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання брендів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для отримання всіх магазинів
+app.get('/stores', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT id, name, logo, years_with_us, link FROM stores ORDER BY name ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання магазинів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для створення нового товару
+app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { category_id, brand_id, name, rating, views, code, description, description_full, composition, usage } = req.body;
+    const features = [];
+    const store_prices = [];
+
+    // Парсинг features та store_prices з FormData
+    Object.keys(req.body).forEach((key) => {
+      if (key.startsWith('features[')) {
+        const match = key.match(/features\[(\d+)\]\[(\w+)\]/);
+        if (match) {
+          const index = parseInt(match[1]);
+          const field = match[2];
+          if (!features[index]) features[index] = {};
+          features[index][field] = req.body[key];
+        }
+      } else if (key.startsWith('store_prices[')) {
+        const match = key.match(/store_prices\[(\d+)\]\[(\w+)\]/);
+        if (match) {
+          const index = parseInt(match[1]);
+          const field = match[2];
+          if (!store_prices[index]) store_prices[index] = {};
+          store_prices[index][field] = req.body[key];
+        }
+      }
+    });
+
+    // Вставка в таблицю products
+    const productResult = await client.query(
+      `INSERT INTO products (category_id, brand_id, name, rating, views, code)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [category_id, brand_id, name, rating || null, views || 0, code || null]
+    );
+    const productId = productResult.rows[0].id;
+
+    // Завантаження зображень у Cloudinary
+    const imageUrls = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const result = await new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }).end(file.buffer);
+        });
+        imageUrls.push(result.secure_url);
+      }
+
+      // Вставка зображень у product_images
+      for (const imageUrl of imageUrls) {
+        await client.query(
+          `INSERT INTO product_images (product_id, image_url)
+           VALUES ($1, $2)`,
+          [productId, imageUrl]
+        );
+      }
+    }
+
+    // Вставка деталей товару
+    await client.query(
+      `INSERT INTO product_details (product_id, description, composition, usage, description_full)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [productId, description || null, composition || null, usage || null, description_full || null]
+    );
+
+    // Вставка характеристик товару
+    for (const feature of features) {
+      if (feature.key && feature.value) {
+        await client.query(
+          `INSERT INTO product_features (product_id, ${feature.key})
+           VALUES ($1, $2)`,
+          [productId, feature.value]
+        );
+      }
+    }
+
+    // Вставка цін у магазинах
+    for (const store of store_prices) {
+      if (store.store_id && store.price) {
+        await client.query(
+          `INSERT INTO store_prices (product_id, store_id, price, link)
+           VALUES ($1, $2, $3, $4)`,
+          [productId, store.store_id, store.price, store.link || null]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Товар успішно створено', productId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка створення товару:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  } finally {
+    client.release();
+  }
+});
+
+// Решта ендпоінтів залишаються без змін
 // Ендпоінт для завантаження зображень у Cloudinary
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
@@ -83,14 +234,12 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
 });
 
 // Ендпоінт для завантаження аватарки користувача
-// Ендпоінт для завантаження аватарки користувача
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Аватарка не надана' });
     }
 
-    // Перевірка конфігурації Cloudinary
     if (!cloudinary.config().cloud_name || !cloudinary.config().api_key || !cloudinary.config().api_secret) {
       console.error('Помилка: Налаштування Cloudinary відсутні або некоректні');
       return res.status(500).json({ error: 'Помилка конфігурації сервера' });
@@ -243,7 +392,6 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // Перевірка, чи категорія належить користувачу (якщо надано)
     if (saved_category_id) {
       const categoryCheck = await pool.query(
         `SELECT id FROM saved_categories WHERE id = $1 AND user_id = $2`,
@@ -311,7 +459,7 @@ app.post('/login', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, nickname, email, password, photo, gender, birth_date FROM users WHERE nickname = $1 OR email = $1`,
+      `SELECT id, nickname, email, password, photo, gender, birth_date, is_admin FROM users WHERE nickname = $1 OR email = $1`,
       [identifier]
     );
 
@@ -325,8 +473,8 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Неправильний нікнейм/пошта або пароль' });
     }
 
-    const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
+    const token = jwt.sign({ id: user.id, nickname: user.nickname, is_admin: user.is_admin }, JWT_SECRET, { expiresIn: '1h' });
+    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
   } catch (err) {
     console.error('Помилка входу:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
@@ -342,7 +490,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
       `UPDATE users
        SET email = $1, gender = $2, birth_date = $3
        WHERE id = $4
-       RETURNING id, nickname, email, photo, gender, birth_date`,
+       RETURNING id, nickname, email, photo, gender, birth_date, is_admin`,
       [email || null, gender || null, birth_date || null, userId]
     );
 
@@ -351,7 +499,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
     }
 
     const user = result.rows[0];
-    res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
+    res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
   } catch (err) {
     console.error('Помилка оновлення:', err.stack);
     if (err.code === '23505') {
