@@ -69,7 +69,10 @@ const isAdmin = async (req, res, next) => {
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
+    console.log('Початок створення товару:', { body: req.body, files: req.files ? req.files.length : 0 });
+
     await client.query('BEGIN');
+    console.log('Транзакцію розпочато');
 
     const {
       category_id,
@@ -86,10 +89,23 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       features: featuresJson,
     } = req.body;
 
-    const features = JSON.parse(featuresJson || '{}');
-    const store_prices = [];
+    const features = featuresJson ? JSON.parse(featuresJson) : {};
+    console.log('Дані з форми:', {
+      category_id,
+      brand_id,
+      name,
+      volume,
+      rating,
+      views,
+      code,
+      description,
+      description_full,
+      composition,
+      usage,
+      features,
+    });
 
-    // Парсинг store_prices з FormData
+    const store_prices = [];
     Object.keys(req.body).forEach((key) => {
       if (key.startsWith('store_prices[')) {
         const match = key.match(/store_prices\[(\d+)\]\[(\w+)\]/);
@@ -101,6 +117,15 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
         }
       }
     });
+    console.log('Ціни магазинів:', store_prices);
+
+    // Перевірка поточного значення послідовності
+    const seqResult = await client.query("SELECT currval('products_id_seq')");
+    const maxIdResult = await client.query('SELECT MAX(id) FROM products');
+    console.log('Послідовність і максимальний ID:', {
+      currentSequence: seqResult.rows[0].currval,
+      maxId: maxIdResult.rows[0].max || 0,
+    });
 
     // Вставка в таблицю products
     const productResult = await client.query(
@@ -108,21 +133,23 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
-        category_id,
-        brand_id,
-        name,
+        category_id || null,
+        brand_id || null,
+        name || null,
         volume || null,
         features.type || null,
-        rating || null,
-        views || 0,
+        rating ? parseFloat(rating) : null,
+        views ? parseInt(views) : null,
         code || null,
       ]
     );
     const productId = productResult.rows[0].id;
+    console.log('Товар створено:', { productId });
 
     // Завантаження зображень у Cloudinary
     const imageUrls = [];
     if (req.files && req.files.length > 0) {
+      console.log('Завантаження зображень у Cloudinary:', { fileCount: req.files.length });
       for (const file of req.files) {
         const result = await new Promise((resolve, reject) => {
           cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
@@ -132,23 +159,34 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
         });
         imageUrls.push(result.secure_url);
       }
+      console.log('Зображення завантажено:', { imageUrls });
 
       // Вставка зображень у product_images
       for (const imageUrl of imageUrls) {
         await client.query(
           `INSERT INTO product_images (product_id, image_url)
            VALUES ($1, $2)`,
-          [productId, imageUrl]
+          [productId, imageUrl || null]
         );
       }
+      console.log('Зображення збережено в product_images');
+    } else {
+      console.log('Зображення відсутні');
     }
 
     // Вставка деталей товару
     await client.query(
       `INSERT INTO product_details (product_id, description, composition, usage, description_full)
        VALUES ($1, $2, $3, $4, $5)`,
-      [productId, description || null, composition || null, usage || null, description_full || null]
+      [
+        productId,
+        description || null,
+        composition || null,
+        usage || null,
+        description_full || null,
+      ]
     );
+    console.log('Деталі товару збережено в product_details');
 
     // Вставка характеристик товару
     if (Object.keys(features).length > 0) {
@@ -168,31 +206,53 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [productId, ...featureValues]
       );
+      console.log('Характеристики збережено в product_features:', featureValues);
+    } else {
+      console.log('Характеристики відсутні');
     }
 
     // Вставка цін у магазинах
-    for (const store of store_prices) {
-      if (store.store_id && store.price) {
-        await client.query(
-          `INSERT INTO store_prices (product_id, store_id, price, link)
-           VALUES ($1, $2, $3, $4)`,
-          [productId, store.store_id, store.price, store.link || null]
-        );
+    if (store_prices.length > 0) {
+      for (const store of store_prices) {
+        if (store.store_id && store.price) {
+          await client.query(
+            `INSERT INTO store_prices (product_id, store_id, price, link)
+             VALUES ($1, $2, $3, $4)`,
+            [
+              productId,
+              store.store_id || null,
+              parseFloat(store.price) || null,
+              store.link || null,
+            ]
+          );
+        }
       }
+      console.log('Ціни магазинів збережено в store_prices');
+    } else {
+      console.log('Ціни магазинів відсутні');
     }
 
     await client.query('COMMIT');
+    console.log('Транзакцію завершено');
     res.json({ message: 'Товар успішно створено', productId });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Помилка створення товару:', err.stack);
+    console.error('Помилка створення товару:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+    });
     if (err.code === '23505' && err.constraint === 'products_pkey') {
-      res.status(500).json({ error: 'Помилка: конфлікт ID товару. Спробуйте ще раз або зверніться до адміністратора.' });
+      res.status(500).json({
+        error: 'Помилка: конфлікт ID товару. Перевірте послідовність products_id_seq або зверніться до адміністратора.',
+      });
     } else {
       res.status(500).json({ error: 'Помилка сервера' });
     }
   } finally {
     client.release();
+    console.log('Клієнт бази даних звільнено');
   }
 });
 
@@ -227,7 +287,6 @@ app.get('/stores', async (req, res) => {
   }
 });
 
-// Додаткові ендпоінти (з попередньої версії) залишаються без змін
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -862,7 +921,7 @@ app.get('/products/:id', async (req, res) => {
         type: result.rows[0].feature_type,
         class: result.rows[0].class,
         hairType: result.rows[0].feature_type,
-        features: row.features,
+        features: result.rows[0].features,
         category: result.rows[0].feature_category,
         purpose: result.rows[0].purpose,
         gender: result.rows[0].gender,
