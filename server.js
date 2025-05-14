@@ -1,14 +1,36 @@
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const cloudinary = require('cloudinary').v2;
+const multer = require('multer');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key'; // Змініть на безпечний ключ у продакшені
+// Налаштування Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Налаштування Multer для обробки файлів
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // Обмеження 25 МБ
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Дозволено лише зображення'), false);
+    }
+    cb(null, true);
+  },
+});
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fc0432fb054d94da265cd6e565721b49f66d7a447cdaa76fe30d0214bf20b24220179d3fcd5eea298bedbead28c2636f3ca65baf668cd89ad679ef99b36f43db'; // Змініть на безпечний ключ у продакшені
 
 // Налаштування підключення до PostgreSQL
 const pool = new Pool({
@@ -28,6 +50,80 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
+
+// Ендпоінт для завантаження зображень у Cloudinary
+app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Зображення не надано' });
+    }
+
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }).end(req.file.buffer);
+    });
+
+    const productId = req.body.productId;
+    const imageUrl = result.secure_url;
+
+    const dbResult = await pool.query(
+      `INSERT INTO product_images (product_id, image_url)
+       VALUES ($1, $2)
+       RETURNING id, image_url`,
+      [productId, imageUrl]
+    );
+
+    res.json({ message: 'Зображення успішно завантажено', imageUrl: dbResult.rows[0].image_url });
+  } catch (err) {
+    console.error('Помилка обробки завантаження:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Ендпоінт для завантаження аватарки користувача
+app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Аватарка не надана' });
+    }
+
+    const userId = req.user.id;
+
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream(
+        { folder: 'avatars', public_id: `user_${userId}` },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      ).end(req.file.buffer);
+    });
+
+    const photoUrl = result.secure_url;
+
+    const dbResult = await pool.query(
+      `UPDATE users
+       SET photo = $1
+       WHERE id = $2
+       RETURNING id, nickname, email, photo, gender, birth_date`,
+      [photoUrl, userId]
+    );
+
+    if (dbResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Користувача не знайдено' });
+    }
+
+    res.json({
+      message: 'Аватарку успішно завантажено',
+      user: dbResult.rows[0],
+    });
+  } catch (err) {
+    console.error('Помилка завантаження аватарки:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
 
 // Ендпоінт для отримання всіх категорій користувача
 app.get('/categories', authenticateToken, async (req, res) => {
@@ -132,7 +228,7 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const userId = req.user.id;
 
   try {
-    // Verify the category belongs to the user (if provided)
+    // Перевірка, чи категорія належить користувачу (якщо надано)
     if (saved_category_id) {
       const categoryCheck = await pool.query(
         `SELECT id FROM saved_categories WHERE id = $1 AND user_id = $2`,
@@ -174,13 +270,13 @@ app.post('/register', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO users (nickname, email, password, photo, gender, birth_date, is_admin)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, nickname, email, gender, birth_date`,
+       RETURNING id, nickname, email, photo, gender, birth_date`,
       [nickname || null, email || null, hashedPassword, photo || null, gender || null, birth_date || null, false]
     );
 
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, gender: user.gender, birth_date: user.birth_date } });
+    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
   } catch (err) {
     console.error('Помилка реєстрації:', err.stack);
     if (err.code === '23505') {
@@ -200,7 +296,7 @@ app.post('/login', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, nickname, email, password, gender, birth_date FROM users WHERE nickname = $1 OR email = $1`,
+      `SELECT id, nickname, email, password, photo, gender, birth_date FROM users WHERE nickname = $1 OR email = $1`,
       [identifier]
     );
 
@@ -215,7 +311,7 @@ app.post('/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, gender: user.gender, birth_date: user.birth_date } });
+    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
   } catch (err) {
     console.error('Помилка входу:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
@@ -231,7 +327,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
       `UPDATE users
        SET email = $1, gender = $2, birth_date = $3
        WHERE id = $4
-       RETURNING id, nickname, email, gender, birth_date`,
+       RETURNING id, nickname, email, photo, gender, birth_date`,
       [email || null, gender || null, birth_date || null, userId]
     );
 
@@ -240,7 +336,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
     }
 
     const user = result.rows[0];
-    res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, gender: user.gender, birth_date: user.birth_date } });
+    res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
   } catch (err) {
     console.error('Помилка оновлення:', err.stack);
     if (err.code === '23505') {
