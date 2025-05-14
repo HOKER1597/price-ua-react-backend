@@ -186,7 +186,11 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Помилка створення товару:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
+    if (err.code === '23505' && err.constraint === 'products_pkey') {
+      res.status(500).json({ error: 'Помилка: конфлікт ID товару. Спробуйте ще раз або зверніться до адміністратора.' });
+    } else {
+      res.status(500).json({ error: 'Помилка сервера' });
+    }
   } finally {
     client.release();
   }
@@ -858,7 +862,7 @@ app.get('/products/:id', async (req, res) => {
         type: result.rows[0].feature_type,
         class: result.rows[0].class,
         hairType: result.rows[0].feature_type,
-        features: result.rows[0].features,
+        features: row.features,
         category: result.rows[0].feature_category,
         purpose: result.rows[0].purpose,
         gender: result.rows[0].gender,
