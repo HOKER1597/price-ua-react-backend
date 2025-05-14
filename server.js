@@ -83,10 +83,17 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
 });
 
 // Ендпоінт для завантаження аватарки користувача
+// Ендпоінт для завантаження аватарки користувача
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Аватарка не надана' });
+    }
+
+    // Перевірка конфігурації Cloudinary
+    if (!cloudinary.config().cloud_name || !cloudinary.config().api_key || !cloudinary.config().api_secret) {
+      console.error('Помилка: Налаштування Cloudinary відсутні або некоректні');
+      return res.status(500).json({ error: 'Помилка конфігурації сервера' });
     }
 
     const userId = req.user.id;
@@ -95,8 +102,12 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
       cloudinary.uploader.upload_stream(
         { folder: 'avatars', public_id: `user_${userId}` },
         (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
+          if (error) {
+            console.error('Помилка Cloudinary:', error.message || error);
+            reject(error);
+          } else {
+            resolve(result);
+          }
         }
       ).end(req.file.buffer);
     });
@@ -120,7 +131,11 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
       user: dbResult.rows[0],
     });
   } catch (err) {
-    console.error('Помилка завантаження аватарки:', err.stack);
+    console.error('Помилка завантаження аватарки:', {
+      message: err.message || 'Немає повідомлення про помилку',
+      stack: err.stack || 'Немає стеку помилки',
+      error: err,
+    });
     res.status(500).json({ error: 'Помилка сервера' });
   }
 });
