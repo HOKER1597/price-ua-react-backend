@@ -87,7 +87,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       composition,
       usage,
       features: featuresJson,
-      store_prices: storePricesRaw,
     } = req.body;
 
     const features = featuresJson ? JSON.parse(featuresJson) : {};
@@ -107,37 +106,31 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     });
 
     // Парсинг store_prices
-    let store_prices = [];
-    console.log('Сирі дані store_prices:', { storePricesRaw });
+    const store_prices = [];
+    const storePriceKeys = Object.keys(req.body).filter((key) => key.startsWith('store_prices['));
+    const indices = [...new Set(storePriceKeys.map((key) => {
+      const match = key.match(/store_prices\[(\d+)\]/);
+      return match ? parseInt(match[1]) : null;
+    }).filter((index) => index !== null))];
 
-    // Спроба парсити як JSON
-    if (storePricesRaw) {
-      try {
-        const parsed = typeof storePricesRaw === 'string' ? JSON.parse(storePricesRaw) : storePricesRaw;
-        if (Array.isArray(parsed)) {
-          store_prices = parsed.filter(store => store && store.store_id && store.price);
+    for (const index of indices) {
+      const store = {
+        store_id: req.body[`store_prices[${index}][store_id]`],
+        price: req.body[`store_prices[${index}][price]`],
+        link: req.body[`store_prices[${index}][link]`],
+      };
+      if (store.store_id && store.price && !isNaN(parseFloat(store.price))) {
+        // Перевірка існування store_id
+        const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store.store_id]);
+        if (storeCheck.rows.length > 0) {
+          store_prices.push(store);
+        } else {
+          console.warn('Недійсний store_id:', { store_id: store.store_id, index });
         }
-      } catch (e) {
-        console.error('Помилка парсингу store_prices JSON:', e.message);
+      } else {
+        console.warn('Недійсна ціна або store_id:', { store, index });
       }
     }
-
-    // Фallback для формату FormData
-    if (store_prices.length === 0) {
-      Object.keys(req.body).forEach((key) => {
-        if (key.startsWith('store_prices[')) {
-          const match = key.match(/store_prices\[(\d+)\]\[(\w+)\]/);
-          if (match) {
-            const index = parseInt(match[1]);
-            const field = match[2];
-            if (!store_prices[index]) store_prices[index] = {};
-            store_prices[index][field] = req.body[key];
-          }
-        }
-      });
-      store_prices = store_prices.filter(store => store && store.store_id && store.price);
-    }
-
     console.log('Ціни магазинів:', store_prices);
 
     // Перевірка максимального ID і синхронізація послідовності
@@ -240,11 +233,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     // Вставка цін у магазинах
     if (store_prices.length > 0) {
       for (const store of store_prices) {
-        // Перевірка існування store_id
-        const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store.store_id]);
-        if (storeCheck.rows.length === 0) {
-          throw new Error(`Магазин з ID ${store.store_id} не існує`);
-        }
         await client.query(
           `INSERT INTO store_prices (product_id, store_id, price, link)
            VALUES ($1, $2, $3, $4)`,
@@ -279,7 +267,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   }
 });
 
-// Ендпоінт для отримання категорій
+// Решта ендпоінтів (без змін)
 app.get('/categories', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
@@ -290,7 +278,6 @@ app.get('/categories', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання брендів
 app.get('/brands', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
@@ -301,7 +288,6 @@ app.get('/brands', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання магазинів
 app.get('/stores', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, name, logo, link FROM stores ORDER BY name ASC');
@@ -312,7 +298,6 @@ app.get('/stores', async (req, res) => {
   }
 });
 
-// Ендпоінт для завантаження зображення товару
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -343,7 +328,6 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
   }
 });
 
-// Ендпоінт для завантаження аватарки користувача
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
@@ -399,7 +383,6 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
   }
 });
 
-// Ендпоінт для отримання збережених категорій користувача
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -417,7 +400,6 @@ app.get('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для створення нової категорії
 app.post('/categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
@@ -443,7 +425,6 @@ app.post('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення категорії
 app.put('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
@@ -474,7 +455,6 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення категорії
 app.delete('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
@@ -495,7 +475,6 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення категорії збереженого товару
 app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const { saved_category_id } = req.body;
@@ -531,7 +510,6 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для реєстрації користувача
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
   try {
@@ -549,7 +527,7 @@ app.post('/register', async (req, res) => {
 
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
+  res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
   } catch (err) {
     console.error('Помилка реєстрації:', err.stack);
     if (err.code === '23505') {
@@ -560,7 +538,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Ендпоінт для входу користувача
 app.post('/login', async (req, res) => {
   const { identifier, password } = req.body;
   try {
@@ -591,7 +568,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення даних користувача
 app.post('/update-user', authenticateToken, async (req, res) => {
   const { email, gender, birth_date } = req.body;
   const userId = req.user.id;
@@ -620,7 +596,6 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для перевірки збереженого товару
 app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -636,7 +611,6 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання всіх збережених товарів
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -655,7 +629,6 @@ app.get('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для масової перевірки збережених товарів
 app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   const { productIds } = req.body;
   const userId = req.user.id;
@@ -675,7 +648,6 @@ app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для додавання товару до збережених
 app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   const userId = req.user.id;
@@ -697,7 +669,6 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення товару зі збережених
 app.delete('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -717,7 +688,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-// Ендпоінт для отримання списку товарів
 app.get('/products', async (req, res) => {
   try {
     const {
@@ -772,7 +742,7 @@ app.get('/products', async (req, res) => {
     }
 
     if (category) {
-      const categories = category.split(',');
+     const categories = category.split(',');
       conditions.push(`c.name_en = ANY($${values.length + 1})`);
       values.push(categories);
     }
@@ -793,8 +763,7 @@ app.get('/products', async (req, res) => {
         )
       `);
       values.push(parseFloat(priceFrom), parseFloat(priceTo));
-    }
-    else if (priceRanges) {
+    } else if (priceRanges) {
       const ranges = priceRanges.split(',');
       const rangeConditions = ranges.map((range, index) => {
         const [min, max] = range.includes('+') ? [1000, Infinity] : range.split('-').map(Number);
@@ -916,7 +885,6 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання деталей товару
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
