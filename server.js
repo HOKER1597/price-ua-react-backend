@@ -194,7 +194,9 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
             }
           }).end(file.buffer);
         });
-        imageUrls.push(result.secure_url);
+        if (result.secure_url && result.secure_url !== 'placeholder.webp') {
+          imageUrls.push(result.secure_url);
+        }
       }
 
       // Вставка зображень у product_images
@@ -202,7 +204,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
         await client.query(
           `INSERT INTO product_images (product_id, image_url)
            VALUES ($1, $2)`,
-          [productId, imageUrl || null]
+          [productId, imageUrl]
         );
       }
       console.log('Зображення збережено в product_images:', imageUrls);
@@ -278,7 +280,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     await client.query('COMMIT');
     console.log('Транзакцію успішно завершено');
-    res.json({ message: 'Товар успішно створено', productId });
+    res.json({ message: 'Товар успішно створено', productId, images: imageUrls });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Помилка створення товару:', {
@@ -327,7 +329,10 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
     try {
       features = featuresJson ? JSON.parse(featuresJson) : {};
       store_prices = storePricesJson ? JSON.parse(storePricesJson) : [];
-      existing_images = existingImagesJson ? (Array.isArray(existingImagesJson) ? existingImagesJson : [existingImagesJson]) : [];
+      existing_images = existingImagesJson ? JSON.parse(existingImagesJson) : [];
+      if (!Array.isArray(existing_images)) {
+        existing_images = existing_images ? [existing_images] : [];
+      }
     } catch (err) {
       console.error('Помилка парсингу JSON:', { featuresJson, storePricesJson, existingImagesJson, error: err.message });
       throw new Error('Невалідний формат features, store_prices або existing_images');
@@ -398,9 +403,9 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
     console.log('Старі зображення видалено:', { productId });
 
     const imageUrls = [];
-    // Збереження існуючих зображень
+    // Збереження існуючих зображень, виключаючи placeholder.webp
     for (const imageUrl of existing_images) {
-      if (imageUrl) {
+      if (imageUrl && imageUrl !== 'placeholder.webp') {
         imageUrls.push(imageUrl);
         await client.query(
           `INSERT INTO product_images (product_id, image_url)
@@ -425,27 +430,30 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
             }
           }).end(file.buffer);
         });
-        imageUrls.push(result.secure_url);
-        await client.query(
-          `INSERT INTO product_images (product_id, image_url)
-           VALUES ($1, $2)`,
-          [productId, result.secure_url]
-        );
+        if (result.secure_url && result.secure_url !== 'placeholder.webp') {
+          imageUrls.push(result.secure_url);
+          await client.query(
+            `INSERT INTO product_images (product_id, image_url)
+             VALUES ($1, $2)`,
+            [productId, result.secure_url]
+          );
+        }
       }
     }
     console.log('Зображення збережено в product_images:', imageUrls);
 
     // Оновлення деталей товару
     await client.query(
-      `UPDATE product_details
-       SET description = $1, composition = $2, usage = $3, description_full = $4
-       WHERE product_id = $5`,
+      `INSERT INTO product_details (product_id, description, composition, usage, description_full)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (product_id) DO UPDATE
+       SET description = $2, composition = $3, usage = $4, description_full = $5`,
       [
+        productId,
         description || null,
         composition || null,
         usage || null,
         description_full || null,
-        productId,
       ]
     );
     console.log('Деталі товару оновлено в product_details');
@@ -507,7 +515,7 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
 
     await client.query('COMMIT');
     console.log('Транзакцію успішно завершено');
-    res.json({ message: 'Товар успішно оновлено', productId });
+    res.json({ message: 'Товар успішно оновлено', productId, images: imageUrls });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Помилка оновлення товару:', {
@@ -609,7 +617,7 @@ app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
   }
 });
 
-// ОDANний ендпоінт для отримання збережених категорій
+// Ендпоінт для отримання збережених категорій
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -734,7 +742,7 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `UPDATE saved_products
-       SET correo_category_id = $1
+       SET saved_category_id = $1
        WHERE product_id = $2 AND user_id = $3
        RETURNING product_id, saved_category_id`,
       [saved_category_id || null, productId, userId]
@@ -959,7 +967,7 @@ app.get('/products', async (req, res) => {
     console.log('Отримання списку товарів:', req.query);
     const {
       page = 1,
-      limit = all,
+      limit = 10,
       search,
       category,
       brands,
@@ -980,7 +988,7 @@ app.get('/products', async (req, res) => {
              pd.description, pd.composition, pd.usage, pd.description_full,
              pf.brand AS feature_brand, pf.country, pf.type AS feature_type,
              pf.class, pf.category AS feature_category, pf.purpose, pf.gender, pf.active_ingredients,
-             array_agg(DISTINCT pi.image_url) FILTER (WHERE pi.image_url IS NOT NULL) AS images,
+             array_agg(DISTINCT pi.image_url) FILTER (WHERE pi.image_url IS NOT NULL AND pi.image_url != 'placeholder.webp') AS images,
              (SELECT json_agg(json_build_object(
                'store_id', sp.store_id,
                'name', s.name,
@@ -1138,13 +1146,10 @@ app.get('/products', async (req, res) => {
           country: row.country,
           type: row.feature_type,
           class: row.class,
-          hairType: row.feature_type,
-          features: row.features,
           category: row.feature_category,
           purpose: row.purpose,
           gender: row.gender,
-          activeIngredients: row.active_ingredients,
-          description: row.description
+          active_ingredients: row.active_ingredients,
         }
       })),
       total: parseInt(countResult.rows[0].total, 10),
@@ -1166,7 +1171,7 @@ app.get('/products/:id', async (req, res) => {
              pd.description, pd.composition, pd.usage, pd.description_full,
              pf.brand AS feature_brand, pf.country, pf.type AS feature_type,
              pf.class, pf.category AS feature_category, pf.purpose, pf.gender, pf.active_ingredients,
-             array_agg(DISTINCT pi.image_url) FILTER (WHERE pi.image_url IS NOT NULL) AS images,
+             array_agg(DISTINCT pi.image_url) FILTER (WHERE pi.image_url IS NOT NULL AND pi.image_url != 'placeholder.webp') AS images,
              (SELECT json_agg(json_build_object(
                'store_id', sp.store_id,
                'name', s.name,
