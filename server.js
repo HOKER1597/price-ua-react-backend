@@ -1203,13 +1203,10 @@ app.get('/products/:id', async (req, res) => {
         country: result.rows[0].country,
         type: result.rows[0].feature_type,
         class: result.rows[0].class,
-        hairType: result.rows[0].feature_type,
-        features: result.rows[0].features,
         category: result.rows[0].feature_category,
         purpose: result.rows[0].purpose,
         gender: result.rows[0].gender,
-        activeIngredients: result.rows[0].active_ingredients,
-        description: result.rows[0].description
+        active_ingredients: result.rows[0].active_ingredients,
       }
     };
     console.log('Деталі товару отримано:', { id });
