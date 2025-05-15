@@ -959,7 +959,7 @@ app.get('/products', async (req, res) => {
     console.log('Отримання списку товарів:', req.query);
     const {
       page = 1,
-      limit = 24,
+      limit = all,
       search,
       category,
       brands,
