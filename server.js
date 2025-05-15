@@ -1162,7 +1162,7 @@ app.get('/products/:id', async (req, res) => {
     console.log('Отримання деталей товару:', { id });
     const result = await pool.query(`
       SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
-             c.name_ua AS category_name, c.name_en AS category_id, b.name AS brand_name,
+             c.id AS category_id, c.name_ua AS category_name, b.id AS brand_id, b.name AS brand_name,
              pd.description, pd.composition, pd.usage, pd.description_full,
              pf.brand AS feature_brand, pf.country, pf.type AS feature_type,
              pf.class, pf.category AS feature_category, pf.purpose, pf.gender, pf.active_ingredients,
@@ -1185,7 +1185,7 @@ app.get('/products/:id', async (req, res) => {
       LEFT JOIN product_features pf ON p.id = pf.product_id
       LEFT JOIN product_images pi ON p.id = pi.product_id
       WHERE p.id = $1
-      GROUP BY p.id, c.name_ua, c.name_en, b.name, pd.description, pd.composition, pd.usage, pd.description_full,
+      GROUP BY p.id, c.id, c.name_ua, b.id, b.name, pd.description, pd.composition, pd.usage, pd.description_full,
                pf.brand, pf.country, pf.type, pf.class, pf.category, pf.purpose, pf.gender, pf.active_ingredients
     `, [id]);
 
