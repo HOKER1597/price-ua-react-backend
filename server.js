@@ -295,6 +295,62 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   }
 });
 
+// Ендпоінт для видалення товару
+app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, res) => {
+  const { productId } = req.params;
+  const client = await pool.connect();
+  try {
+    console.log('Початок видалення товару:', { productId });
+
+    await client.query('BEGIN');
+    console.log('Транзакцію розпочато');
+
+    // Перевірка існування товару
+    const productCheck = await client.query('SELECT id FROM products WHERE id = $1', [productId]);
+    if (productCheck.rows.length === 0) {
+      console.log('Товар не існує:', { productId });
+      throw new Error(`Товар з ID ${productId} не існує`);
+    }
+
+    // Видалення даних з пов’язаних таблиць
+    await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
+    console.log('Зображення товару видалено:', { productId });
+
+    await client.query('DELETE FROM store_prices WHERE product_id = $1', [productId]);
+    console.log('Ціни магазинів видалено:', { productId });
+
+    await client.query('DELETE FROM product_details WHERE product_id = $1', [productId]);
+    console.log('Деталі товару видалено:', { productId });
+
+    await client.query('DELETE FROM product_features WHERE product_id = $1', [productId]);
+    console.log('Характеристики товару видалено:', { productId });
+
+    await client.query('DELETE FROM saved_products WHERE product_id = $1', [productId]);
+    console.log('Записи про збережені товари видалено:', { productId });
+
+    // Видалення товару з таблиці products
+    await client.query('DELETE FROM products WHERE id = $1', [productId]);
+    console.log('Товар видалено з таблиці products:', { productId });
+
+    await client.query('COMMIT');
+    console.log('Транзакцію успішно завершено');
+    res.json({ message: 'Товар і всі пов’язані дані успішно видалено' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка видалення товару:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
+  }
+});
+
 // Решта ендпоінтів залишаються без змін
 app.get('/categories', async (req, res) => {
   try {
