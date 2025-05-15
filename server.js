@@ -238,7 +238,9 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       ];
       const featureValues = featureFields.map((field) => features[field] || null);
       await client.query(
-        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose, gender, active_ingredients)
+        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose
+
+, gender, active_ingredients)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [productId, ...featureValues]
       );
@@ -249,7 +251,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     // Вставка цін у магазинах
     if (store_prices.length > 0) {
-      console.log('Обробка цін магазинів:', store_prices);
+      console.log(' Обробка цін магазинів:', store_prices);
       for (const store of store_prices) {
         if (!store.store_id || !store.price || isNaN(parseFloat(store.price))) {
           console.warn('Пропущено невалідну ціну магазину:', store);
@@ -447,7 +449,7 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
       `UPDATE users
        SET photo = $1
        WHERE id = $2
-       RETURNING id, nickname, email, photo, gender, birth_date`,
+       RETURNING id, nickname, email, photo, gender, birth_date, is_admin`,
       [photoUrl, userId]
     );
 
@@ -622,14 +624,14 @@ app.post('/register', async (req, res) => {
     const result = await pool.query(
       `INSERT INTO users (nickname, email, password, photo, gender, birth_date, is_admin)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, nickname, email, photo, gender, birth_date`,
+       RETURNING id, nickname, email, photo, gender, birth_date, is_admin`,
       [nickname || null, email || null, hashedPassword, photo || null, gender || null, birth_date || null, false]
     );
 
     const user = result.rows[0];
     console.log('Користувача зареєстровано:', { userId: user.id });
-    const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
+    const token = jwt.sign({ id: user.id, nickname: user.nickname, is_admin: user.is_admin }, JWT_SECRET, { expiresIn: '1h' });
+    res.json({ token, user });
   } catch (err) {
     console.error('Помилка реєстрації:', err.stack);
     if (err.code === '23505') {
@@ -668,7 +670,7 @@ app.post('/login', async (req, res) => {
 
     console.log('Користувач увійшов:', { userId: user.id });
     const token = jwt.sign({ id: user.id, nickname: user.nickname, is_admin: user.is_admin }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
+    res.json({ token, user });
   } catch (err) {
     console.error('Помилка входу:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
@@ -695,7 +697,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
 
     console.log('Дані користувача оновлено:', result.rows[0]);
     const user = result.rows[0];
-    res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
+    res.json({ user });
   } catch (err) {
     console.error('Помилка оновлення:', err.stack);
     if (err.code === '23505') {
