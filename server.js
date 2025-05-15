@@ -11,17 +11,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Налаштування Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Налаштування Multer для обробки файлів
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // Обмеження 25 МБ
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype.startsWith('image/')) {
       return cb(new Error('Дозволено лише зображення'), false);
@@ -32,13 +30,11 @@ const upload = multer({
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fc0432fb054d94da265cd6e565721b49f66d7a447cdaa76fe30d0214bf20b24220179d3fcd5eea298bedbead28c2636f3ca65baf668cd89ad679ef99b36f43db';
 
-// Налаштування підключення до PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://cosmetick_ua_7v96_user:wqrSsi3lDg8ZztkxXlVvlrQq3MyCYK5M@dpg-d0erudmmcj7s7385nb1g-a.oregon-postgres.render.com/cosmetick_ua',
   ssl: { rejectUnauthorized: false },
 });
 
-// Middleware для перевірки токена
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -57,7 +53,6 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Middleware для перевірки адмінських прав
 const isAdmin = async (req, res, next) => {
   try {
     console.log('Перевірка адмінських прав для користувача:', req.user.id);
@@ -74,7 +69,6 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// Ендпоінт для створення нового товару
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -100,7 +94,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       store_prices: storePricesJson,
     } = req.body;
 
-    // Parse JSON fields with fallback
     let features = {};
     let store_prices = [];
     try {
@@ -125,13 +118,11 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       store_prices,
     });
 
-    // Validate required fields
     if (!category_id || !brand_id || !name) {
       console.log('Відсутні обов’язкові поля:', { category_id, brand_id, name });
       throw new Error('Категорія, бренд і назва є обов’язковими');
     }
 
-    // Validate category_id and brand_id existence
     const categoryCheck = await client.query('SELECT id FROM categories WHERE id = $1', [category_id]);
     if (categoryCheck.rows.length === 0) {
       console.log('Категорія не існує:', { category_id });
@@ -146,12 +137,10 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     console.log('Категорія та бренд валідні');
 
-    // Перевірка максимального ID і синхронізація послідовності
     const maxIdResult = await client.query('SELECT MAX(id) FROM products');
     const maxId = maxIdResult.rows[0].max || 0;
     console.log('Максимальний ID у products:', { maxId });
 
-    // Синхронізувати послідовність
     const seqResult = await client.query(
       "SELECT setval('products_id_seq', COALESCE($1, 0) + 1, false) AS seq_value",
       [maxId]
@@ -159,7 +148,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     const nextId = parseInt(seqResult.rows[0].seq_value);
     console.log('Послідовність products_id_seq синхронізовано:', { nextId });
 
-    // Вставка в таблицю products
     const productResult = await client.query(
       `INSERT INTO products (category_id, brand_id, name, volume, type, rating, views, code)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -170,15 +158,14 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
         name || null,
         volume || null,
         features.type || null,
-        0, // Default rating
-        0, // Default views
+        0,
+        0,
         code || null,
       ]
     );
     const productId = productResult.rows[0].id;
     console.log('Товар створено:', { productId });
 
-    // Завантаження зображень у Cloudinary
     const imageUrls = [];
     if (req.files && req.files.length > 0) {
       console.log('Завантаження зображень у Cloudinary:', { fileCount: req.files.length });
@@ -197,7 +184,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
         imageUrls.push(result.secure_url);
       }
 
-      // Вставка зображень у product_images
       for (const imageUrl of imageUrls) {
         await client.query(
           `INSERT INTO product_images (product_id, image_url)
@@ -210,7 +196,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       console.log('Зображення відсутні');
     }
 
-    // Вставка деталей товару
     await client.query(
       `INSERT INTO product_details (product_id, description, composition, usage, description_full)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -224,7 +209,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     );
     console.log('Деталі товару збережено в product_details');
 
-    // Вставка характеристик товару
     if (Object.keys(features).length > 0) {
       const featureFields = [
         'brand',
@@ -247,7 +231,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       console.log('Характеристики відсутні');
     }
 
-    // Вставка цін у магазинах
     if (store_prices.length > 0) {
       console.log('Обробка цін магазинів:', store_prices);
       for (const store of store_prices) {
@@ -295,7 +278,6 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   }
 });
 
-// Ендпоінт для оновлення товару
 app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const { productId } = req.params;
   const client = await pool.connect();
@@ -320,14 +302,16 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
       existing_images: existingImagesJson,
     } = req.body;
 
-    // Parse JSON fields with fallback
     let features = {};
     let store_prices = [];
     let existing_images = [];
     try {
       features = featuresJson ? JSON.parse(featuresJson) : {};
       store_prices = storePricesJson ? JSON.parse(storePricesJson) : [];
-      existing_images = existingImagesJson ? (Array.isArray(existingImagesJson) ? existingImagesJson : [existingImagesJson]) : [];
+      existing_images = existingImagesJson ? JSON.parse(existingImagesJson) : [];
+      if (!Array.isArray(existing_images)) {
+        existing_images = [existing_images];
+      }
     } catch (err) {
       console.error('Помилка парсингу JSON:', { featuresJson, storePricesJson, existingImagesJson, error: err.message });
       throw new Error('Невалідний формат features, store_prices або existing_images');
@@ -348,20 +332,17 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
       existing_images,
     });
 
-    // Validate required fields
     if (!category_id || !brand_id || !name) {
       console.log('Відсутні обов’язкові поля:', { category_id, brand_id, name });
       throw new Error('Категорія, бренд і назва є обов’язковими');
     }
 
-    // Validate product existence
     const productCheck = await client.query('SELECT id FROM products WHERE id = $1', [productId]);
     if (productCheck.rows.length === 0) {
       console.log('Товар не існує:', { productId });
       throw new Error(`Товар з ID ${productId} не існує`);
     }
 
-    // Validate category_id and brand_id existence
     const categoryCheck = await client.query('SELECT id FROM categories WHERE id = $1', [category_id]);
     if (categoryCheck.rows.length === 0) {
       console.log('Категорія не існує:', { category_id });
@@ -376,7 +357,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
 
     console.log('Товар, категорія та бренд валідні');
 
-    // Оновлення таблиці products
     await client.query(
       `UPDATE products
        SET category_id = $1, brand_id = $2, name = $3, volume = $4, type = $5, code = $6
@@ -393,13 +373,12 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
     );
     console.log('Товар оновлено в products:', { productId });
 
-    // Оновлення зображень
     await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
     console.log('Старі зображення видалено:', { productId });
 
     const imageUrls = [];
-    // Збереження існуючих зображень
-    for (const imageUrl of existing_images) {
+    const filteredExistingImages = existing_images.filter(url => url && !url.includes('placeholder.webp'));
+    for (const imageUrl of filteredExistingImages) {
       if (imageUrl) {
         imageUrls.push(imageUrl);
         await client.query(
@@ -410,7 +389,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
       }
     }
 
-    // Завантаження нових зображень у Cloudinary
     if (req.files && req.files.length > 0) {
       console.log('Завантаження нових зображень у Cloudinary:', { fileCount: req.files.length });
       for (const file of req.files) {
@@ -435,7 +413,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
     }
     console.log('Зображення збережено в product_images:', imageUrls);
 
-    // Оновлення деталей товару
     await client.query(
       `UPDATE product_details
        SET description = $1, composition = $2, usage = $3, description_full = $4
@@ -450,7 +427,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
     );
     console.log('Деталі товару оновлено в product_details');
 
-    // Оновлення характеристик товару
     await client.query('DELETE FROM product_features WHERE product_id = $1', [productId]);
     if (Object.keys(features).length > 0) {
       const featureFields = [
@@ -474,7 +450,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
       console.log('Характеристики відсутні');
     }
 
-    // Оновлення цін у магазинах
     await client.query('DELETE FROM store_prices WHERE product_id = $1', [productId]);
     console.log('Старі ціни магазинів видалено:', { productId });
     if (store_prices.length > 0) {
@@ -524,7 +499,6 @@ app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('i
   }
 });
 
-// Ендпоінт для видалення товару
 app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, res) => {
   const { productId } = req.params;
   const client = await pool.connect();
@@ -534,14 +508,12 @@ app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, 
     await client.query('BEGIN');
     console.log('Транзакцію розпочато');
 
-    // Перевірка існування товару
     const productCheck = await client.query('SELECT id FROM products WHERE id = $1', [productId]);
     if (productCheck.rows.length === 0) {
       console.log('Товар не існує:', { productId });
       throw new Error(`Товар з ID ${productId} не існує`);
     }
 
-    // Видалення даних з пов’язаних таблиць
     await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
     console.log('Зображення товару видалено:', { productId });
 
@@ -557,7 +529,6 @@ app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, 
     await client.query('DELETE FROM saved_products WHERE product_id = $1', [productId]);
     console.log('Записи про збережені товари видалено:', { productId });
 
-    // Видалення товару з таблиці products
     await client.query('DELETE FROM products WHERE id = $1', [productId]);
     console.log('Товар видалено з таблиці products:', { productId });
 
@@ -580,7 +551,6 @@ app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, 
   }
 });
 
-// Ендпоінт для очищення безіменних категорій
 app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   const client = await pool.connect();
@@ -588,7 +558,6 @@ app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
     console.log('Початок очищення безіменних категорій для користувача:', { userId });
     await client.query('BEGIN');
 
-    // Видалення категорій з порожньою або null назвою
     const result = await pool.query(
       `DELETE FROM saved_categories
        WHERE user_id = $1 AND (name IS NULL OR name = '' OR TRIM(name) = '')
@@ -609,7 +578,6 @@ app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
   }
 });
 
-// ОDANний ендпоінт для отримання збережених категорій
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -734,7 +702,7 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `UPDATE saved_products
-       SET correo_category_id = $1
+       SET saved_category_id = $1
        WHERE product_id = $2 AND user_id = $3
        RETURNING product_id, saved_category_id`,
       [saved_category_id || null, productId, userId]
@@ -959,7 +927,7 @@ app.get('/products', async (req, res) => {
     console.log('Отримання списку товарів:', req.query);
     const {
       page = 1,
-      limit = all,
+      limit = 'all',
       search,
       category,
       brands,
@@ -1131,7 +1099,7 @@ app.get('/products', async (req, res) => {
     res.json({
       products: searchResults.map(row => ({
         ...row,
-        images: row.images || [],
+        images: row.images ? row.images.filter(url => !url.includes('placeholder.webp')) : [],
         store_prices: row.store_prices || [],
         features: {
           brand: row.feature_brand,
@@ -1196,7 +1164,7 @@ app.get('/products/:id', async (req, res) => {
 
     const product = {
       ...result.rows[0],
-      images: result.rows[0].images || [],
+      images: result.rows[0].images ? result.rows[0].images.filter(url => !url.includes('placeholder.webp')) : [],
       store_prices: result.rows[0].store_prices || [],
       features: {
         brand: result.rows[0].feature_brand,
