@@ -249,7 +249,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     // Вставка цін у магазинах
     if (store_prices.length > 0) {
-      console.log(' Обробка цін магазинів:', store_prices);
+      console.log('Обробка цін магазинів:', store_prices);
       for (const store of store_prices) {
         if (!store.store_id || !store.price || isNaN(parseFloat(store.price))) {
           console.warn('Пропущено невалідну ціну магазину:', store);
@@ -282,6 +282,235 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Помилка створення товару:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
+  }
+});
+
+// Ендпоінт для оновлення товару
+app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
+  const { productId } = req.params;
+  const client = await pool.connect();
+  try {
+    console.log('Початок оновлення товару:', { productId, body: req.body, files: req.files ? req.files.length : 0 });
+
+    await client.query('BEGIN');
+    console.log('Транзакцію розпочато');
+
+    const {
+      category_id,
+      brand_id,
+      name,
+      volume,
+      code,
+      description,
+      description_full,
+      composition,
+      usage,
+      features: featuresJson,
+      store_prices: storePricesJson,
+      existing_images: existingImagesJson,
+    } = req.body;
+
+    // Parse JSON fields with fallback
+    let features = {};
+    let store_prices = [];
+    let existing_images = [];
+    try {
+      features = featuresJson ? JSON.parse(featuresJson) : {};
+      store_prices = storePricesJson ? JSON.parse(storePricesJson) : [];
+      existing_images = existingImagesJson ? (Array.isArray(existingImagesJson) ? existingImagesJson : [existingImagesJson]) : [];
+    } catch (err) {
+      console.error('Помилка парсингу JSON:', { featuresJson, storePricesJson, existingImagesJson, error: err.message });
+      throw new Error('Невалідний формат features, store_prices або existing_images');
+    }
+
+    console.log('Дані з форми:', {
+      category_id,
+      brand_id,
+      name,
+      volume,
+      code,
+      description,
+      description_full,
+      composition,
+      usage,
+      features,
+      store_prices,
+      existing_images,
+    });
+
+    // Validate required fields
+    if (!category_id || !brand_id || !name) {
+      console.log('Відсутні обов’язкові поля:', { category_id, brand_id, name });
+      throw new Error('Категорія, бренд і назва є обов’язковими');
+    }
+
+    // Validate product existence
+    const productCheck = await client.query('SELECT id FROM products WHERE id = $1', [productId]);
+    if (productCheck.rows.length === 0) {
+      console.log('Товар не існує:', { productId });
+      throw new Error(`Товар з ID ${productId} не існує`);
+    }
+
+    // Validate category_id and brand_id existence
+    const categoryCheck = await client.query('SELECT id FROM categories WHERE id = $1', [category_id]);
+    if (categoryCheck.rows.length === 0) {
+      console.log('Категорія не існує:', { category_id });
+      throw new Error(`Категорія з ID ${category_id} не існує`);
+    }
+
+    const brandCheck = await client.query('SELECT id FROM brands WHERE id = $1', [brand_id]);
+    if (brandCheck.rows.length === 0) {
+      console.log('Бренд не існує:', { brand_id });
+      throw new Error(`Бренд з ID ${brand_id} не існує`);
+    }
+
+    console.log('Товар, категорія та бренд валідні');
+
+    // Оновлення таблиці products
+    await client.query(
+      `UPDATE products
+       SET category_id = $1, brand_id = $2, name = $3, volume = $4, type = $5, code = $6
+       WHERE id = $7`,
+      [
+        category_id || null,
+        brand_id || null,
+        name || null,
+        volume || null,
+        features.type || null,
+        code || null,
+        productId,
+      ]
+    );
+    console.log('Товар оновлено в products:', { productId });
+
+    // Оновлення зображень
+    await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
+    console.log('Старі зображення видалено:', { productId });
+
+    const imageUrls = [];
+    // Збереження існуючих зображень
+    for (const imageUrl of existing_images) {
+      if (imageUrl) {
+        imageUrls.push(imageUrl);
+        await client.query(
+          `INSERT INTO product_images (product_id, image_url)
+           VALUES ($1, $2)`,
+          [productId, imageUrl]
+        );
+      }
+    }
+
+    // Завантаження нових зображень у Cloudinary
+    if (req.files && req.files.length > 0) {
+      console.log('Завантаження нових зображень у Cloudinary:', { fileCount: req.files.length });
+      for (const file of req.files) {
+        const result = await new Promise((resolve, reject) => {
+          cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
+            if (error) {
+              console.error('Помилка завантаження зображення:', error);
+              reject(error);
+            } else {
+              console.log('Зображення завантажено:', result.secure_url);
+              resolve(result);
+            }
+          }).end(file.buffer);
+        });
+        imageUrls.push(result.secure_url);
+        await client.query(
+          `INSERT INTO product_images (product_id, image_url)
+           VALUES ($1, $2)`,
+          [productId, result.secure_url]
+        );
+      }
+    }
+    console.log('Зображення збережено в product_images:', imageUrls);
+
+    // Оновлення деталей товару
+    await client.query(
+      `UPDATE product_details
+       SET description = $1, composition = $2, usage = $3, description_full = $4
+       WHERE product_id = $5`,
+      [
+        description || null,
+        composition || null,
+        usage || null,
+        description_full || null,
+        productId,
+      ]
+    );
+    console.log('Деталі товару оновлено в product_details');
+
+    // Оновлення характеристик товару
+    await client.query('DELETE FROM product_features WHERE product_id = $1', [productId]);
+    if (Object.keys(features).length > 0) {
+      const featureFields = [
+        'brand',
+        'country',
+        'type',
+        'class',
+        'category',
+        'purpose',
+        'gender',
+        'active_ingredients',
+      ];
+      const featureValues = featureFields.map((field) => features[field] || null);
+      await client.query(
+        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose, gender, active_ingredients)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [productId, ...featureValues]
+      );
+      console.log('Характеристики оновлено в product_features:', featureValues);
+    } else {
+      console.log('Характеристики відсутні');
+    }
+
+    // Оновлення цін у магазинах
+    await client.query('DELETE FROM store_prices WHERE product_id = $1', [productId]);
+    console.log('Старі ціни магазинів видалено:', { productId });
+    if (store_prices.length > 0) {
+      console.log('Обробка цін магазинів:', store_prices);
+      for (const store of store_prices) {
+        if (!store.store_id || !store.price || isNaN(parseFloat(store.price))) {
+          console.warn('Пропущено невалідну ціну магазину:', store);
+          continue;
+        }
+        const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store.store_id]);
+        if (storeCheck.rows.length === 0) {
+          console.warn('Магазин не існує:', { store_id: store.store_id });
+          throw new Error(`Магазин з ID ${store.store_id} не існує`);
+        }
+        await client.query(
+          `INSERT INTO store_prices (product_id, store_id, price, link)
+           VALUES ($1, $2, $3, $4)`,
+          [
+            productId,
+            store.store_id,
+            parseFloat(store.price),
+            store.link || null,
+          ]
+        );
+        console.log('Ціна магазину оновлено:', { store_id: store.store_id, price: store.price });
+      }
+    } else {
+      console.log('Ціни магазинів відсутні');
+    }
+
+    await client.query('COMMIT');
+    console.log('Транзакцію успішно завершено');
+    res.json({ message: 'Товар успішно оновлено', productId });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка оновлення товару:', {
       message: err.message,
       stack: err.stack,
       code: err.code,
@@ -360,7 +589,7 @@ app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
     await client.query('BEGIN');
 
     // Видалення категорій з порожньою або null назвою
-    const result = await client.query(
+    const result = await pool.query(
       `DELETE FROM saved_categories
        WHERE user_id = $1 AND (name IS NULL OR name = '' OR TRIM(name) = '')
        RETURNING id`,
@@ -380,7 +609,7 @@ app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
   }
 });
 
-// Оновлений ендпоінт для отримання збережених категорій
+// ОDANний ендпоінт для отримання збережених категорій
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -505,7 +734,7 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
 
     const result = await pool.query(
       `UPDATE saved_products
-       SET saved_category_id = $1
+       SET correo_category_id = $1
        WHERE product_id = $2 AND user_id = $3
        RETURNING product_id, saved_category_id`,
       [saved_category_id || null, productId, userId]
