@@ -42,10 +42,16 @@ const pool = new Pool({
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Токен відсутній' });
+  if (!token) {
+    console.log('Токен відсутній');
+    return res.status(401).json({ error: 'Токен відсутній' });
+  }
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Недійсний токен' });
+    if (err) {
+      console.log('Недійсний токен:', err.message);
+      return res.status(403).json({ error: 'Недійсний токен' });
+    }
     req.user = user;
     next();
   });
@@ -54,10 +60,13 @@ const authenticateToken = (req, res, next) => {
 // Middleware для перевірки адмінських прав
 const isAdmin = async (req, res, next) => {
   try {
+    console.log('Перевірка адмінських прав для користувача:', req.user.id);
     const result = await pool.query('SELECT is_admin FROM users WHERE id = $1', [req.user.id]);
     if (result.rows.length === 0 || !result.rows[0].is_admin) {
+      console.log('Доступ заборонено: користувач не адмін');
       return res.status(403).json({ error: 'Доступ дозволено лише адміністраторам' });
     }
+    console.log('Адмінські права підтверджено');
     next();
   } catch (err) {
     console.error('Помилка перевірки адмінських прав:', err.stack);
@@ -69,7 +78,10 @@ const isAdmin = async (req, res, next) => {
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
-    console.log('Початок створення товару:', { body: req.body, files: req.files ? req.files.length : 0 });
+    console.log('Початок створення товару:', {
+      body: req.body,
+      files: req.files ? req.files.length : 0,
+    });
 
     await client.query('BEGIN');
     console.log('Транзакцію розпочато');
@@ -90,8 +102,17 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       store_prices: storePricesJson,
     } = req.body;
 
-    const features = featuresJson ? JSON.parse(featuresJson) : {};
-    const store_prices = storePricesJson ? JSON.parse(storePricesJson) : [];
+    // Parse JSON fields with fallback
+    let features = {};
+    let store_prices = [];
+    try {
+      features = featuresJson ? JSON.parse(featuresJson) : {};
+      store_prices = storePricesJson ? JSON.parse(storePricesJson) : [];
+    } catch (err) {
+      console.error('Помилка парсингу JSON:', { featuresJson, storePricesJson, error: err.message });
+      throw new Error('Невалідний формат features або store_prices');
+    }
+
     console.log('Дані з форми:', {
       category_id,
       brand_id,
@@ -107,6 +128,27 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       features,
       store_prices,
     });
+
+    // Validate required fields
+    if (!category_id || !brand_id || !name) {
+      console.log('Відсутні обов’язкові поля:', { category_id, brand_id, name });
+      throw new Error('Категорія, бренд і назва є обов’язковими');
+    }
+
+    // Validate category_id and brand_id existence
+    const categoryCheck = await client.query('SELECT id FROM categories WHERE id = $1', [category_id]);
+    if (categoryCheck.rows.length === 0) {
+      console.log('Категорія не існує:', { category_id });
+      throw new Error(`Категорія з ID ${category_id} не існує`);
+    }
+
+    const brandCheck = await client.query('SELECT id FROM brands WHERE id = $1', [brand_id]);
+    if (brandCheck.rows.length === 0) {
+      console.log('Бренд не існує:', { brand_id });
+      throw new Error(`Бренд з ID ${brand_id} не існує`);
+    }
+
+    console.log('Категорія та бренд валідні');
 
     // Перевірка максимального ID і синхронізація послідовності
     const maxIdResult = await client.query('SELECT MAX(id) FROM products');
@@ -147,13 +189,17 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       for (const file of req.files) {
         const result = await new Promise((resolve, reject) => {
           cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
-            if (error) reject(error);
-            else resolve(result);
+            if (error) {
+              console.error('Помилка завантаження зображення:', error);
+              reject(error);
+            } else {
+              console.log('Зображення завантажено:', result.secure_url);
+              resolve(result);
+            }
           }).end(file.buffer);
         });
         imageUrls.push(result.secure_url);
       }
-      console.log('Зображення завантажено:', { imageUrls });
 
       // Вставка зображень у product_images
       for (const imageUrl of imageUrls) {
@@ -163,7 +209,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
           [productId, imageUrl || null]
         );
       }
-      console.log('Зображення збережено в product_images');
+      console.log('Зображення збережено в product_images:', imageUrls);
     } else {
       console.log('Зображення відсутні');
     }
@@ -207,13 +253,15 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     // Вставка цін у магазинах
     if (store_prices.length > 0) {
+      console.log('Обробка цін магазинів:', store_prices);
       for (const store of store_prices) {
-        if (!store.store_id || !store.price) {
+        if (!store.store_id || !store.price || isNaN(parseFloat(store.price))) {
           console.warn('Пропущено невалідну ціну магазину:', store);
           continue;
         }
         const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store.store_id]);
         if (storeCheck.rows.length === 0) {
+          console.warn('Магазин не існує:', { store_id: store.store_id });
           throw new Error(`Магазин з ID ${store.store_id} не існує`);
         }
         await client.query(
@@ -226,14 +274,14 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
             store.link || null,
           ]
         );
+        console.log('Ціна магазину збережено:', { store_id: store.store_id, price: store.price });
       }
-      console.log('Ціни магазинів збережено в store_prices:', store_prices);
     } else {
       console.log('Ціни магазинів відсутні');
     }
 
     await client.query('COMMIT');
-    console.log('Транзакцію завершено');
+    console.log('Транзакцію успішно завершено');
     res.json({ message: 'Товар успішно створено', productId });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -242,8 +290,9 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       stack: err.stack,
       code: err.code,
       constraint: err.constraint,
+      detail: err.detail,
     });
-    res.status(500).json({ error: `Помилка сервера: ${err.message}` });
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
   } finally {
     client.release();
     console.log('Клієнт бази даних звільнено');
@@ -253,7 +302,9 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 // Ендпоінт для отримання категорій
 app.get('/categories', async (req, res) => {
   try {
+    console.log('Отримання категорій');
     const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
+    console.log('Категорії отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
     console.error('Помилка отримання категорій:', err.stack);
@@ -264,7 +315,9 @@ app.get('/categories', async (req, res) => {
 // Ендпоінт для отримання брендів
 app.get('/brands', async (req, res) => {
   try {
+    console.log('Отримання брендів');
     const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
+    console.log('Бренди отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
     console.error('Помилка отримання брендів:', err.stack);
@@ -275,7 +328,9 @@ app.get('/brands', async (req, res) => {
 // Ендпоінт для отримання магазинів
 app.get('/stores', async (req, res) => {
   try {
+    console.log('Отримання магазинів');
     const result = await pool.query('SELECT id, name, logo, link FROM stores ORDER BY name ASC');
+    console.log('Магазини отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
     console.error('Помилка отримання магазинів:', err.stack);
@@ -283,13 +338,16 @@ app.get('/stores', async (req, res) => {
   }
 });
 
+// Решта ендпоінтів залишаються без змін, оскільки вони не впливають на створення товару
 // Ендпоінт для завантаження зображення товару
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
+      console.log('Зображення не надано');
       return res.status(400).json({ error: 'Зображення не надано' });
     }
 
+    console.log('Завантаження зображення у Cloudinary');
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
         if (error) reject(error);
@@ -299,6 +357,7 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
 
     const productId = req.body.productId;
     const imageUrl = result.secure_url;
+    console.log('Зображення завантажено:', { productId, imageUrl });
 
     const dbResult = await pool.query(
       `INSERT INTO product_images (product_id, image_url)
@@ -318,31 +377,24 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
+      console.log('Аватарка не надана');
       return res.status(400).json({ error: 'Аватарка не надана' });
     }
 
-    if (!cloudinary.config().cloud_name || !cloudinary.config().api_key || !cloudinary.config().api_secret) {
-      console.error('Помилка: Налаштування Cloudinary відсутні або некоректні');
-      return res.status(500).json({ error: 'Помилка конфігурації сервера' });
-    }
-
+    console.log('Завантаження аватарки у Cloudinary');
     const userId = req.user.id;
-
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
         { folder: 'avatars', public_id: `user_${userId}` },
         (error, result) => {
-          if (error) {
-            console.error('Помилка Cloudinary:', error.message || error);
-            reject(error);
-          } else {
-            resolve(result);
-          }
+          if (error) reject(error);
+          else resolve(result);
         }
       ).end(req.file.buffer);
     });
 
     const photoUrl = result.secure_url;
+    console.log('Аватарка завантажена:', { userId, photoUrl });
 
     const dbResult = await pool.query(
       `UPDATE users
@@ -353,6 +405,7 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
     );
 
     if (dbResult.rows.length === 0) {
+      console.log('Користувача не знайдено:', { userId });
       return res.status(404).json({ error: 'Користувача не знайдено' });
     }
 
@@ -361,11 +414,7 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
       user: dbResult.rows[0],
     });
   } catch (err) {
-    console.error('Помилка завантаження аватарки:', {
-      message: err.message || 'Немає повідомлення про помилку',
-      stack: err.stack || 'Немає стеку помилки',
-      error: err,
-    });
+    console.error('Помилка завантаження аватарки:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
   }
 });
@@ -374,6 +423,7 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
+    console.log('Отримання збережених категорій для користувача:', userId);
     const result = await pool.query(
       `SELECT id, name, created_at
        FROM saved_categories
@@ -381,9 +431,10 @@ app.get('/categories', authenticateToken, async (req, res) => {
        ORDER BY created_at ASC`,
       [userId]
     );
+    console.log('Збережені категорії отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
-    console.error('Помилка отримання категорій:', err.stack);
+    console.error('Помилка отримання збережених категорій:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
   }
 });
@@ -393,16 +444,19 @@ app.post('/categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
   if (!name || !name.trim()) {
+    console.log('Назва категорії відсутня');
     return res.status(400).json({ error: 'Назва категорії обов’язкова' });
   }
 
   try {
+    console.log('Створення нової категорії:', { name, userId });
     const result = await pool.query(
       `INSERT INTO saved_categories (user_id, name)
        VALUES ($1, $2)
        RETURNING id, name, created_at`,
       [userId, name.trim()]
     );
+    console.log('Категорію створено:', result.rows[0]);
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Помилка створення категорії:', err.stack);
@@ -420,10 +474,12 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
   if (!name || !name.trim()) {
+    console.log('Назва категорії відсутня');
     return res.status(400).json({ error: 'Назва категорії обов’язкова' });
   }
 
   try {
+    console.log('Оновлення категорії:', { id, name, userId });
     const result = await pool.query(
       `UPDATE saved_categories
        SET name = $1
@@ -432,8 +488,10 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
       [name.trim(), id, userId]
     );
     if (result.rows.length === 0) {
+      console.log('Категорію не знайдено або немає доступу:', { id, userId });
       return res.status(404).json({ error: 'Категорію не знайдено або ви не маєте доступу' });
     }
+    console.log('Категорію оновлено:', result.rows[0]);
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Помилка оновлення категорії:', err.stack);
@@ -450,6 +508,7 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
   try {
+    console.log('Видалення категорії:', { id, userId });
     const result = await pool.query(
       `DELETE FROM saved_categories
        WHERE id = $1 AND user_id = $2
@@ -457,8 +516,10 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
       [id, userId]
     );
     if (result.rows.length === 0) {
+      console.log('Категорію не знайдено або немає доступу:', { id, userId });
       return res.status(404).json({ error: 'Категорію не знайдено або ви не маєте доступу' });
     }
+    console.log('Категорію видалено');
     res.json({ message: 'Категорію видалено' });
   } catch (err) {
     console.error('Помилка видалення категорії:', err.stack);
@@ -473,12 +534,14 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const userId = req.user.id;
 
   try {
+    console.log('Оновлення категорії збереженого товару:', { productId, saved_category_id, userId });
     if (saved_category_id) {
       const categoryCheck = await pool.query(
         `SELECT id FROM saved_categories WHERE id = $1 AND user_id = $2`,
         [saved_category_id, userId]
       );
       if (categoryCheck.rows.length === 0) {
+        console.log('Категорія не належить користувачу:', { saved_category_id, userId });
         return res.status(403).json({ error: 'Категорія не належить користувачу' });
       }
     }
@@ -492,9 +555,11 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      console.log('Товар не знайдено у бажаному:', { productId, userId });
       return res.status(404).json({ error: 'Товар не знайдено у бажаному' });
     }
 
+    console.log('Категорію товару оновлено:', result.rows[0]);
     res.json({ message: 'Категорію товару оновлено', saved_category_id: result.rows[0].saved_category_id });
   } catch (err) {
     console.error('Помилка оновлення категорії товару:', err.stack);
@@ -506,7 +571,9 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
   try {
+    console.log('Реєстрація користувача:', { nickname, email });
     if (!nickname || !email || !password) {
+      console.log('Відсутні обов’язкові поля для реєстрації');
       return res.status(400).json({ error: 'Нікнейм, пошта та пароль обов’язкові' });
     }
 
@@ -519,6 +586,7 @@ app.post('/register', async (req, res) => {
     );
 
     const user = result.rows[0];
+    console.log('Користувача зареєстровано:', { userId: user.id });
     const token = jwt.sign({ id: user.id, nickname: user.nickname }, JWT_SECRET, { expiresIn: '1h' });
     res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date } });
   } catch (err) {
@@ -535,7 +603,9 @@ app.post('/register', async (req, res) => {
 app.post('/login', async (req, res) => {
   const { identifier, password } = req.body;
   try {
+    console.log('Вхід користувача:', { identifier });
     if (!identifier || !password) {
+      console.log('Відсутні ідентифікатор або пароль');
       return res.status(400).json({ error: 'Потрібні ідентифікатор і пароль' });
     }
 
@@ -545,15 +615,18 @@ app.post('/login', async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      console.log('Користувача не знайдено:', { identifier });
       return res.status(401).json({ error: 'Неправильний нікнейм/пошта або пароль' });
     }
 
     const user = result.rows[0];
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
+      console.log('Неправильний пароль для:', { identifier });
       return res.status(401).json({ error: 'Неправильний нікнейм/пошта або пароль' });
     }
 
+    console.log('Користувач увійшов:', { userId: user.id });
     const token = jwt.sign({ id: user.id, nickname: user.nickname, is_admin: user.is_admin }, JWT_SECRET, { expiresIn: '1h' });
     res.json({ token, user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
   } catch (err) {
@@ -567,6 +640,7 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   const { email, gender, birth_date } = req.body;
   const userId = req.user.id;
   try {
+    console.log('Оновлення даних користувача:', { userId, email, gender, birth_date });
     const result = await pool.query(
       `UPDATE users
        SET email = $1, gender = $2, birth_date = $3
@@ -576,9 +650,11 @@ app.post('/update-user', authenticateToken, async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      console.log('Користувача не знайдено:', { userId });
       return res.status(404).json({ error: 'Користувача не знайдено' });
     }
 
+    console.log('Дані користувача оновлено:', result.rows[0]);
     const user = result.rows[0];
     res.json({ user: { id: user.id, nickname: user.nickname, email: user.email, photo: user.photo, gender: user.gender, birth_date: user.birth_date, is_admin: user.is_admin } });
   } catch (err) {
@@ -596,6 +672,7 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
   try {
+    console.log('Перевірка збереженого товару:', { productId, userId });
     const result = await pool.query(
       `SELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
       [userId, productId]
@@ -611,6 +688,7 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
+    console.log('Отримання збережених товарів для користувача:', userId);
     const result = await pool.query(
       `SELECT product_id, saved_category_id FROM saved_products WHERE user_id = $1`,
       [userId]
@@ -619,6 +697,7 @@ app.get('/saved-products', authenticateToken, async (req, res) => {
       product_id: row.product_id,
       saved_category_id: row.saved_category_id
     }));
+    console.log('Збережені товари отримано:', savedProducts.length);
     res.json({ savedProducts });
   } catch (err) {
     console.error('Помилка отримання збережених товарів:', err.stack);
@@ -631,7 +710,9 @@ app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   const { productIds } = req.body;
   const userId = req.user.id;
   try {
+    console.log('Масова перевірка збережених товарів:', { productIds, userId });
     if (!Array.isArray(productIds) || productIds.length === 0) {
+      console.log('Порожній масив productIds');
       return res.json({ savedProductIds: [] });
     }
     const result = await pool.query(
@@ -639,6 +720,7 @@ app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
       [userId, productIds]
     );
     const savedProductIds = result.rows.map(row => row.product_id);
+    console.log('Збережені товари:', savedProductIds);
     res.json({ savedProductIds });
   } catch (err) {
     console.error('Помилка масової перевірки збережених товарів:', err.stack);
@@ -651,6 +733,7 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   const userId = req.user.id;
   try {
+    console.log('Додавання товару до збережених:', { productId, userId });
     const result = await pool.query(
       `INSERT INTO saved_products (user_id, product_id)
        VALUES ($1, $2)
@@ -659,8 +742,10 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
       [userId, productId]
     );
     if (result.rows.length === 0) {
+      console.log('Товар уже додано до бажаного:', { productId });
       return res.status(400).json({ error: 'Товар уже додано до бажаного' });
     }
+    console.log('Товар додано до бажаного');
     res.json({ message: 'Товар додано до бажаного' });
   } catch (err) {
     console.error('Помилка додавання до бажаного:', err.stack);
@@ -673,14 +758,17 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   const { productId } = req.params;
   const userId = req.user.id;
   try {
+    console.log('Видалення товару зі збережених:', { productId, userId });
     const result = await pool.query(
       `DELETE FROM saved_products WHERE user_id = $1 AND product_id = $2
        RETURNING id`,
       [userId, productId]
     );
     if (result.rows.length === 0) {
+      console.log('Товар не знайдено у бажаному:', { productId });
       return res.status(404).json({ error: 'Товар не знайдено у бажаному' });
     }
+    console.log('Товар видалено з бажаного');
     res.json({ message: 'Товар видалено з бажаного' });
   } catch (err) {
     console.error('Помилка видалення з бажаного:', err.stack);
@@ -691,6 +779,7 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
 // Ендпоінт для отримання списку товарів
 app.get('/products', async (req, res) => {
   try {
+    console.log('Отримання списку товарів:', req.query);
     const {
       page = 1,
       limit = 24,
@@ -827,6 +916,7 @@ app.get('/products', async (req, res) => {
       `;
       const searchResult = await pool.query(searchQuery, values);
       searchResults = searchResult.rows;
+      console.log('Результати пошуку:', searchResults.length);
     } else {
       query += (random === 'true') ? ` ORDER BY RANDOM()` : ` ORDER BY p.id`;
       query += `
@@ -835,9 +925,11 @@ app.get('/products', async (req, res) => {
       values.push(parseInt(limit), offset);
       const result = await pool.query(query, values);
       searchResults = result.rows;
+      console.log('Результати пагінації:', searchResults.length);
     }
 
     const countResult = await pool.query(countQuery, values.slice(0, search || category ? values.length : values.length - 2));
+    console.log('Загальна кількість товарів:', countResult.rows[0].total);
 
     const groupedResults = searchResults.reduce((acc, product) => {
       const category = acc.find((cat) => cat.category === product.category_id);
@@ -891,6 +983,7 @@ app.get('/products', async (req, res) => {
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    console.log('Отримання деталей товару:', { id });
     const result = await pool.query(`
       SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
              c.name_ua AS category_name, c.name_en AS category_id, b.name AS brand_name,
@@ -921,6 +1014,7 @@ app.get('/products/:id', async (req, res) => {
     `, [id]);
 
     if (result.rows.length === 0) {
+      console.log('Продукт не знайдено:', { id });
       return res.status(404).send('Продукт не знайдено');
     }
 
@@ -942,6 +1036,7 @@ app.get('/products/:id', async (req, res) => {
         description: result.rows[0].description
       }
     };
+    console.log('Деталі товару отримано:', { id });
     res.json(product);
   } catch (err) {
     console.error('Помилка запиту /products/:id:', err.stack);
