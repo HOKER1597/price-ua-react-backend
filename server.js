@@ -91,8 +91,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       brand_id,
       name,
       volume,
-      rating,
-      views,
+      price,
       code,
       description,
       description_full,
@@ -118,8 +117,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       brand_id,
       name,
       volume,
-      rating,
-      views,
+      price,
       code,
       description,
       description_full,
@@ -133,6 +131,12 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
     if (!category_id || !brand_id || !name) {
       console.log('Відсутні обов’язкові поля:', { category_id, brand_id, name });
       throw new Error('Категорія, бренд і назва є обов’язковими');
+    }
+
+    // Validate price
+    if (price && (isNaN(parseFloat(price)) || parseFloat(price) < 0)) {
+      console.log('Невалідна ціна:', { price });
+      throw new Error('Ціна повинна бути додатним числом');
     }
 
     // Validate category_id and brand_id existence
@@ -165,17 +169,18 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
 
     // Вставка в таблицю products
     const productResult = await client.query(
-      `INSERT INTO products (category_id, brand_id, name, volume, type, rating, views, code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO products (category_id, brand_id, name, volume, price, type, rating, views, code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         category_id || null,
         brand_id || null,
         name || null,
         volume || null,
+        price ? parseFloat(price) : null,
         features.type || null,
-        rating ? parseFloat(rating) : null,
-        views ? parseInt(views) : null,
+        0, // Default rating
+        0, // Default views
         code || null,
       ]
     );
@@ -338,8 +343,7 @@ app.get('/stores', async (req, res) => {
   }
 });
 
-// Решта ендпоінтів залишаються без змін, оскільки вони не впливають на створення товару
-// Ендпоінт для завантаження зображення товару
+// Решта ендпоінтів без змін, оскільки вони не впливають на створення товару
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
@@ -373,7 +377,6 @@ app.post('/upload-image', authenticateToken, upload.single('image'), async (req,
   }
 });
 
-// Ендпоінт для завантаження аватарки користувача
 app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
@@ -419,7 +422,6 @@ app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (re
   }
 });
 
-// Ендпоінт для отримання збережених категорій користувача
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -439,7 +441,6 @@ app.get('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для створення нової категорії
 app.post('/categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
   const userId = req.user.id;
@@ -468,7 +469,6 @@ app.post('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення категорії
 app.put('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
@@ -503,7 +503,6 @@ app.put('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення категорії
 app.delete('/categories/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
@@ -527,7 +526,6 @@ app.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення категорії збереженого товару
 app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const { saved_category_id } = req.body;
@@ -567,7 +565,6 @@ app.patch('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для реєстрації користувача
 app.post('/register', async (req, res) => {
   const { nickname, email, password, photo, gender, birth_date } = req.body;
   try {
@@ -599,7 +596,6 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// Ендпоінт для входу користувача
 app.post('/login', async (req, res) => {
   const { identifier, password } = req.body;
   try {
@@ -635,7 +631,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Ендпоінт для оновлення даних користувача
 app.post('/update-user', authenticateToken, async (req, res) => {
   const { email, gender, birth_date } = req.body;
   const userId = req.user.id;
@@ -667,7 +662,6 @@ app.post('/update-user', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для перевірки збереженого товару
 app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -684,7 +678,6 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання всіх збережених товарів
 app.get('/saved-products', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -705,7 +698,6 @@ app.get('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для масової перевірки збережених товарів
 app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   const { productIds } = req.body;
   const userId = req.user.id;
@@ -728,7 +720,6 @@ app.post('/saved-products/bulk', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для додавання товару до збережених
 app.post('/saved-products', authenticateToken, async (req, res) => {
   const { productId } = req.body;
   const userId = req.user.id;
@@ -753,7 +744,6 @@ app.post('/saved-products', authenticateToken, async (req, res) => {
   }
 });
 
-// Ендпоінт для видалення товару зі збережених
 app.delete('/saved-products/:productId', authenticateToken, async (req, res) => {
   const { productId } = req.params;
   const userId = req.user.id;
@@ -776,7 +766,6 @@ app.delete('/saved-products/:productId', authenticateToken, async (req, res) => 
   }
 });
 
-// Ендпоінт для отримання списку товарів
 app.get('/products', async (req, res) => {
   try {
     console.log('Отримання списку товарів:', req.query);
@@ -798,7 +787,7 @@ app.get('/products', async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let query = `
-      SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
+      SELECT p.id, p.name, p.volume, p.price, p.type, p.rating, p.views, p.code,
              c.name_ua AS category_name, c.name_en AS category_id, b.name AS brand_name,
              pd.description, pd.composition, pd.usage, pd.description_full,
              pf.brand AS feature_brand, pf.country, pf.type AS feature_type,
@@ -979,13 +968,12 @@ app.get('/products', async (req, res) => {
   }
 });
 
-// Ендпоінт для отримання деталей товару
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
   try {
     console.log('Отримання деталей товару:', { id });
     const result = await pool.query(`
-      SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
+      SELECT p.id, p.name, p.volume, p.price, p.type, p.rating, p.views, p.code,
              c.name_ua AS category_name, c.name_en AS category_id, b.name AS brand_name,
              pd.description, pd.composition, pd.usage, pd.description_full,
              pf.brand AS feature_brand, pf.country, pf.type AS feature_type,
