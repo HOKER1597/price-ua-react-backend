@@ -238,9 +238,7 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
       ];
       const featureValues = featureFields.map((field) => features[field] || null);
       await client.query(
-        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose
-
-, gender, active_ingredients)
+        `INSERT INTO product_features (product_id, brand, country, type, class, category, purpose, gender, active_ingredients)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [productId, ...featureValues]
       );
@@ -353,121 +351,36 @@ app.delete('/admin/product/:productId', authenticateToken, isAdmin, async (req, 
   }
 });
 
-// Решта ендпоінтів залишаються без змін
-app.get('/categories', async (req, res) => {
+// Ендпоінт для очищення безіменних категорій
+app.delete('/categories/cleanup', authenticateToken, async (req, res) => {
+  const userId = req.user.id;
+  const client = await pool.connect();
   try {
-    console.log('Отримання категорій');
-    const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
-    console.log('Категорії отримано:', result.rows.length);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання категорій:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
+    console.log('Початок очищення безіменних категорій для користувача:', { userId });
+    await client.query('BEGIN');
 
-app.get('/brands', async (req, res) => {
-  try {
-    console.log('Отримання брендів');
-    const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
-    console.log('Бренди отримано:', result.rows.length);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання брендів:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
-app.get('/stores', async (req, res) => {
-  try {
-    console.log('Отримання магазинів');
-    const result = await pool.query('SELECT id, name, logo, link FROM stores ORDER BY name ASC');
-    console.log('Магазини отримано:', result.rows.length);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання магазинів:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
-app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
-  try {
-    if (!req.file) {
-      console.log('Зображення не надано');
-      return res.status(400).json({ error: 'Зображення не надано' });
-    }
-
-    console.log('Завантаження зображення у Cloudinary');
-    const result = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }).end(req.file.buffer);
-    });
-
-    const productId = req.body.productId;
-    const imageUrl = result.secure_url;
-    console.log('Зображення завантажено:', { productId, imageUrl });
-
-    const dbResult = await pool.query(
-      `INSERT INTO product_images (product_id, image_url)
-       VALUES ($1, $2)
-       RETURNING id, image_url`,
-      [productId, imageUrl]
+    // Видалення категорій з порожньою або null назвою
+    const result = await client.query(
+      `DELETE FROM saved_categories
+       WHERE user_id = $1 AND (name IS NULL OR name = '' OR TRIM(name) = '')
+       RETURNING id`,
+      [userId]
     );
+    console.log('Безіменні категорії видалено:', { count: result.rows.length });
 
-    res.json({ message: 'Зображення успішно завантажено', imageUrl: dbResult.rows[0].image_url });
+    await client.query('COMMIT');
+    res.json({ message: `Видалено ${result.rows.length} безіменних категорій` });
   } catch (err) {
-    console.error('Помилка обробки завантаження:', err.stack);
+    await client.query('ROLLBACK');
+    console.error('Помилка очищення безіменних категорій:', err.stack);
     res.status(500).json({ error: 'Помилка сервера' });
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
   }
 });
 
-app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
-  try {
-    if (!req.file) {
-      console.log('Аватарка не надана');
-      return res.status(400).json({ error: 'Аватарка не надана' });
-    }
-
-    console.log('Завантаження аватарки у Cloudinary');
-    const userId = req.user.id;
-    const result = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
-        { folder: 'avatars', public_id: `user_${userId}` },
-        (error, result) => {
-          if (error) reject(error);
-          else resolve(result);
-        }
-      ).end(req.file.buffer);
-    });
-
-    const photoUrl = result.secure_url;
-    console.log('Аватарка завантажена:', { userId, photoUrl });
-
-    const dbResult = await pool.query(
-      `UPDATE users
-       SET photo = $1
-       WHERE id = $2
-       RETURNING id, nickname, email, photo, gender, birth_date, is_admin`,
-      [photoUrl, userId]
-    );
-
-    if (dbResult.rows.length === 0) {
-      console.log('Користувача не знайдено:', { userId });
-      return res.status(404).json({ error: 'Користувача не знайдено' });
-    }
-
-    res.json({
-      message: 'Аватарку успішно завантажено',
-      user: dbResult.rows[0],
-    });
-  } catch (err) {
-    console.error('Помилка завантаження аватарки:', err.stack);
-    res.status(500).json({ error: 'Помилка сервера' });
-  }
-});
-
+// Оновлений ендпоінт для отримання збережених категорій
 app.get('/categories', authenticateToken, async (req, res) => {
   const userId = req.user.id;
   try {
@@ -475,7 +388,7 @@ app.get('/categories', authenticateToken, async (req, res) => {
     const result = await pool.query(
       `SELECT id, name, created_at
        FROM saved_categories
-       WHERE user_id = $1
+       WHERE user_id = $1 AND name IS NOT NULL AND TRIM(name) != ''
        ORDER BY created_at ASC`,
       [userId]
     );
@@ -1075,6 +988,120 @@ app.get('/products/:id', async (req, res) => {
   } catch (err) {
     console.error('Помилка запиту /products/:id:', err.stack);
     res.status(500).send('Помилка сервера');
+  }
+});
+
+app.get('/categories/public', async (req, res) => {
+  try {
+    console.log('Отримання категорій');
+    const result = await pool.query('SELECT id, name_ua, name_en FROM categories ORDER BY name_ua ASC');
+    console.log('Категорії отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання категорій:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.get('/brands', async (req, res) => {
+  try {
+    console.log('Отримання брендів');
+    const result = await pool.query('SELECT id, name FROM brands ORDER BY name ASC');
+    console.log('Бренди отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання брендів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.get('/stores', async (req, res) => {
+  try {
+    console.log('Отримання магазинів');
+    const result = await pool.query('SELECT id, name, logo, link FROM stores ORDER BY name ASC');
+    console.log('Магазини отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання магазинів:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      console.log('Зображення не надано');
+      return res.status(400).json({ error: 'Зображення не надано' });
+    }
+
+    console.log('Завантаження зображення у Cloudinary');
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream({ folder: 'products' }, (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }).end(req.file.buffer);
+    });
+
+    const productId = req.body.productId;
+    const imageUrl = result.secure_url;
+    console.log('Зображення завантажено:', { productId, imageUrl });
+
+    const dbResult = await pool.query(
+      `INSERT INTO product_images (product_id, image_url)
+       VALUES ($1, $2)
+       RETURNING id, image_url`,
+      [productId, imageUrl]
+    );
+
+    res.json({ message: 'Зображення успішно завантажено', imageUrl: dbResult.rows[0].image_url });
+  } catch (err) {
+    console.error('Помилка обробки завантаження:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.post('/upload-avatar', authenticateToken, upload.single('avatar'), async (req, res) => {
+  try {
+    if (!req.file) {
+      console.log('Аватарка не надана');
+      return res.status(400).json({ error: 'Аватарка не надана' });
+    }
+
+    console.log('Завантаження аватарки у Cloudinary');
+    const userId = req.user.id;
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream(
+        { folder: 'avatars', public_id: `user_${userId}` },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      ).end(req.file.buffer);
+    });
+
+    const photoUrl = result.secure_url;
+    console.log('Аватарка завантажена:', { userId, photoUrl });
+
+    const dbResult = await pool.query(
+      `UPDATE users
+       SET photo = $1
+       WHERE id = $2
+       RETURNING id, nickname, email, photo, gender, birth_date, is_admin`,
+      [photoUrl, userId]
+    );
+
+    if (dbResult.rows.length === 0) {
+      console.log('Користувача не знайдено:', { userId });
+      return res.status(404).json({ error: 'Користувача не знайдено' });
+    }
+
+    res.json({
+      message: 'Аватарку успішно завантажено',
+      user: dbResult.rows[0],
+    });
+  } catch (err) {
+    console.error('Помилка завантаження аватарки:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
   }
 });
 
