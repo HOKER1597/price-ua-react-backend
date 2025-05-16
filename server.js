@@ -278,6 +278,62 @@ app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10
   }
 });
 
+app.post('/admin/brand', authenticateToken, isAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new Error('Назва бренду є обов’язковою');
+    }
+
+    const result = await client.query(
+      'INSERT INTO brands (name) VALUES ($1) RETURNING id, name',
+      [name.trim()]
+    );
+    await client.query('COMMIT');
+    res.json({ message: 'Бренд успішно створено', brand: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Бренд з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/admin/store', authenticateToken, isAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { name, logo, years_with_us, link } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new Error('Назва магазину є обов’язковою');
+    }
+
+    const result = await client.query(
+      'INSERT INTO stores (name, logo, years_with_us, link) VALUES ($1, $2, $3, $4) RETURNING id, name, logo, years_with_us, link',
+      [name.trim(), logo || null, years_with_us ? parseInt(years_with_us) : null, link || null]
+    );
+    await client.query('COMMIT');
+    res.json({ message: 'Магазин успішно створено', store: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Магазин з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
+  } finally {
+    client.release();
+  }
+});
+
 app.put('/admin/product/:productId', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const { productId } = req.params;
   const client = await pool.connect();
