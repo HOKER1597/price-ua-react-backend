@@ -306,6 +306,67 @@ app.post('/admin/brand', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+app.put('/admin/brand/:brandId', authenticateToken, isAdmin, async (req, res) => {
+  const { brandId } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new Error('Назва бренду є обов’язковою');
+    }
+
+    const brandCheck = await client.query('SELECT id FROM brands WHERE id = $1', [brandId]);
+    if (brandCheck.rows.length === 0) {
+      throw new Error(`Бренд з ID ${brandId} не існує`);
+    }
+
+    const result = await client.query(
+      'UPDATE brands SET name = $1 WHERE id = $2 RETURNING id, name',
+      [name.trim(), brandId]
+    );
+    await client.query('COMMIT');
+    res.json({ message: 'Бренд успішно оновлено', brand: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Бренд з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/admin/brand/:brandId', authenticateToken, isAdmin, async (req, res) => {
+  const { brandId } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const brandCheck = await client.query('SELECT id FROM brands WHERE id = $1', [brandId]);
+    if (brandCheck.rows.length === 0) {
+      throw new Error(`Бренд з ID ${brandId} не існує`);
+    }
+
+    const productCheck = await client.query('SELECT id FROM products WHERE brand_id = $1', [brandId]);
+    if (productCheck.rows.length > 0) {
+      throw new Error('Неможливо видалити бренд, оскільки він використовується в продуктах');
+    }
+
+    await client.query('DELETE FROM brands WHERE id = $1', [brandId]);
+    await client.query('COMMIT');
+    res.json({ message: 'Бренд успішно видалено' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+  }
+});
+
 app.post('/admin/store', authenticateToken, isAdmin, upload.single('logo'), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -348,6 +409,130 @@ app.post('/admin/store', authenticateToken, isAdmin, upload.single('logo'), asyn
     }
   } finally {
     client.release();
+  }
+});
+
+app.put('/admin/store/:storeId', authenticateToken, isAdmin, upload.single('logo'), async (req, res) => {
+  const { storeId } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { name, years_with_us, link } = req.body;
+
+    if (!name || !name.trim()) {
+      throw new Error('Назва магазину є обов’язковою');
+    }
+
+    const storeCheck = await client.query('SELECT id, logo FROM stores WHERE id = $1', [storeId]);
+    if (storeCheck.rows.length === 0) {
+      throw new Error(`Магазин з ID ${storeId} не існує`);
+    }
+
+    let logoUrl = storeCheck.rows[0].logo;
+    if (req.file) {
+      console.log('Завантаження нового логотипу магазину у Cloudinary');
+      const result = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream({ folder: 'stores' }, (error, result) => {
+          if (error) {
+            console.error('Помилка завантаження логотипу:', error);
+            reject(error);
+          } else {
+            console.log('Логотип завантажено:', result.secure_url);
+            resolve(result);
+          }
+        }).end(req.file.buffer);
+      });
+      logoUrl = result.secure_url;
+
+      if (storeCheck.rows[0].logo) {
+        const publicId = storeCheck.rows[0].logo.split('/').pop().split('.')[0];
+        await cloudinary.uploader.destroy(`stores/${publicId}`);
+        console.log('Старий логотип видалено з Cloudinary');
+      }
+    }
+
+    const result = await client.query(
+      'UPDATE stores SET name = $1, logo = $2, years_with_us = $3, link = $4 WHERE id = $5 RETURNING id, name, logo, years_with_us, link',
+      [name.trim(), logoUrl || null, years_with_us ? parseInt(years_with_us) : null, link || null, storeId]
+    );
+    await client.query('COMMIT');
+    res.json({ message: 'Магазин успішно оновлено', store: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Магазин з такою назвою вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
+  } finally {
+    client.release();
+  }
+});
+
+app.delete('/admin/store/:storeId', authenticateToken, isAdmin, async (req, res) => {
+  const { storeId } = req.params;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const storeCheck = await client.query('SELECT id, logo FROM stores WHERE id = $1', [storeId]);
+    if (storeCheck.rows.length === 0) {
+      throw new Error(`Магазин з ID ${storeId} не існує`);
+    }
+
+    const priceCheck = await client.query('SELECT id FROM store_prices WHERE store_id = $1', [storeId]);
+    if (priceCheck.rows.length > 0) {
+      throw new Error('Неможливо видалити магазин, оскільки він використовується в цінах продуктів');
+    }
+
+    if (storeCheck.rows[0].logo) {
+      const publicId = storeCheck.rows[0].logo.split('/').pop().split('.')[0];
+      await cloudinary.uploader.destroy(`stores/${publicId}`);
+      console.log('Логотип магазину видалено з Cloudinary');
+    }
+
+    await client.query('DELETE FROM stores WHERE id = $1', [storeId]);
+    await client.query('COMMIT');
+    res.json({ message: 'Магазин успішно видалено' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/brands/:brandId', authenticateToken, async (req, res) => {
+  const { brandId } = req.params;
+  try {
+    console.log('Отримання бренду:', { brandId });
+    const result = await pool.query('SELECT id, name FROM brands WHERE id = $1', [brandId]);
+    if (result.rows.length === 0) {
+      console.log('Бренд не знайдено:', { brandId });
+      return res.status(404).json({ error: 'Бренд не знайдено' });
+    }
+    console.log('Бренд отримано:', result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка отримання бренду:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+app.get('/stores/:storeId', authenticateToken, async (req, res) => {
+  const { storeId } = req.params;
+  try {
+    console.log('Отримання магазину:', { storeId });
+    const result = await pool.query('SELECT id, name, logo, years_with_us, link FROM stores WHERE id = $1', [storeId]);
+    if (result.rows.length === 0) {
+      console.log('Магазин не знайдено:', { storeId });
+      return res.status(404).json({ error: 'Магазин не знайдено' });
+    }
+    console.log('Магазин отримано:', result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка отримання магазину:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
   }
 });
 
