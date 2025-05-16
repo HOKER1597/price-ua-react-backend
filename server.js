@@ -306,19 +306,36 @@ app.post('/admin/brand', authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/store', authenticateToken, isAdmin, async (req, res) => {
+app.post('/admin/store', authenticateToken, isAdmin, upload.single('logo'), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { name, logo, years_with_us, link } = req.body;
+    const { name, years_with_us, link } = req.body;
 
     if (!name || !name.trim()) {
       throw new Error('Назва магазину є обов’язковою');
     }
 
+    let logoUrl = null;
+    if (req.file) {
+      console.log('Завантаження логотипу магазину у Cloudinary');
+      const result = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload_stream({ folder: 'stores' }, (error, result) => {
+          if (error) {
+            console.error('Помилка завантаження логотипу:', error);
+            reject(error);
+          } else {
+            console.log('Логотип завантажено:', result.secure_url);
+            resolve(result);
+          }
+        }).end(req.file.buffer);
+      });
+      logoUrl = result.secure_url;
+    }
+
     const result = await client.query(
       'INSERT INTO stores (name, logo, years_with_us, link) VALUES ($1, $2, $3, $4) RETURNING id, name, logo, years_with_us, link',
-      [name.trim(), logo || null, years_with_us ? parseInt(years_with_us) : null, link || null]
+      [name.trim(), logoUrl || null, years_with_us ? parseInt(years_with_us) : null, link || null]
     );
     await client.query('COMMIT');
     res.json({ message: 'Магазин успішно створено', store: result.rows[0] });
