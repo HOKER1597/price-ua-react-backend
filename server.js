@@ -1103,7 +1103,7 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   try {
     console.log('Перевірка збереженого товару:', { productId, userId });
     const result = await pool.query(
-      ` امیدSELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
+      `SELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
       [userId, productId]
     );
     res.json({ isSaved: result.rows.length > 0 });
