@@ -69,6 +69,27 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
+// New /profile endpoint to validate token and return user data
+app.get('/profile', authenticateToken, async (req, res) => {
+  try {
+    console.log('Отримання профілю користувача:', req.user.id);
+    const result = await pool.query(
+      'SELECT id, nickname, email, photo, gender, birth_date, is_admin FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      console.log('Користувача не знайдено:', req.user.id);
+      return res.status(404).json({ error: 'Користувача не знайдено' });
+    }
+    console.log('Профіль отримано:', result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка отримання профілю:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Existing routes (unchanged, included for completeness)
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -462,7 +483,7 @@ app.put('/admin/store/:storeId', authenticateToken, isAdmin, upload.single('logo
     if (err.code === '23505') {
       res.status(400).json({ error: 'Магазин з такою назвою вже існує' });
     } else {
-      res.status(500).json({ error: err.message || 'Помилка сервера' });
+      res.status(500).json({ error: 'Помилка сервера' });
     }
   } finally {
     client.release();
@@ -1082,7 +1103,7 @@ app.get('/saved-products/:productId', authenticateToken, async (req, res) => {
   try {
     console.log('Перевірка збереженого товару:', { productId, userId });
     const result = await pool.query(
-      `SELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
+      ` امیدSELECT id FROM saved_products WHERE user_id = $1 AND product_id = $2`,
       [userId, productId]
     );
     res.json({ isSaved: result.rows.length > 0 });
