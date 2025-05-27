@@ -69,7 +69,20 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// New /profile endpoint to validate token and return user data
+// New /cities endpoint to fetch all cities
+app.get('/cities', async (req, res) => {
+  try {
+    console.log('Отримання списку міст');
+    const result = await pool.query('SELECT id, name_ua, name_en FROM cities ORDER BY name_ua ASC');
+    console.log('Міста отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання міст:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
+// Existing routes remain unchanged
 app.get('/profile', authenticateToken, async (req, res) => {
   try {
     console.log('Отримання профілю користувача:', req.user.id);
@@ -89,22 +102,7 @@ app.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// New endpoint to fetch cities
-app.get('/api/cities', async (req, res) => {
-  try {
-    console.log('Отримання міст');
-    const result = await pool.query(
-      'SELECT id, name_en, name_ua, admin_name FROM cities ORDER BY id ASC'
-    );
-    console.log('Міста отримано:', result.rows.length);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Помилка отримання міст:', err.stack);
-    res.status(500).json({ error: 'Не вдалося отримати міста', details: err.message });
-  }
-});
-
-// Existing routes (unchanged, included for completeness)
+// ... (rest of the existing routes remain unchanged, included for completeness)
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
