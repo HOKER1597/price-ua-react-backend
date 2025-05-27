@@ -94,13 +94,13 @@ app.get('/api/cities', async (req, res) => {
   try {
     console.log('Отримання міст');
     const result = await pool.query(
-      'SELECT id, name_en, name_ua, admin_name, population FROM cities ORDER BY population DESC'
+      'SELECT id, name_en, name_ua, admin_name FROM cities ORDER BY id ASC'
     );
     console.log('Міста отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
-    console.error('Помилка отримання міст:', err.stack );
-    res.status(500).json({ error: 'Помилка сервера' });
+    console.error('Помилка отримання міст:', err.stack);
+    res.status(500).json({ error: 'Не вдалося отримати міста', details: err.message });
   }
 });
 
