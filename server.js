@@ -89,6 +89,21 @@ app.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// New endpoint to fetch cities
+app.get('/api/cities', async (req, res) => {
+  try {
+    console.log('Отримання міст');
+    const result = await pool.query(
+      'SELECT id, name_en, name_ua, admin_name, population FROM cities ORDER BY population DESC'
+    );
+    console.log('Міста отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання міст:', err.stack );
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 // Existing routes (unchanged, included for completeness)
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
