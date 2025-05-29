@@ -69,7 +69,6 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
-// New /cities endpoint to fetch all cities
 app.get('/cities', async (req, res) => {
   try {
     console.log('Отримання списку міст');
@@ -82,7 +81,6 @@ app.get('/cities', async (req, res) => {
   }
 });
 
-// Existing routes remain unchanged
 app.get('/profile', authenticateToken, async (req, res) => {
   try {
     console.log('Отримання профілю користувача:', req.user.id);
@@ -102,7 +100,6 @@ app.get('/profile', authenticateToken, async (req, res) => {
   }
 });
 
-// ... (rest of the existing routes remain unchanged, included for completeness)
 app.post('/admin/product', authenticateToken, isAdmin, upload.array('images', 10), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1477,7 +1474,6 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
-// Add this endpoint after existing routes in server.js
 app.get('/store-locations', async (req, res) => {
   const { cityId, productId } = req.query;
   try {
