@@ -1477,6 +1477,36 @@ app.get('/products/:id', async (req, res) => {
   }
 });
 
+// Add this endpoint after existing routes in server.js
+app.get('/store-locations', async (req, res) => {
+  const { cityId, productId } = req.query;
+  try {
+    console.log('Fetching store locations:', { cityId, productId });
+
+    if (!cityId || !productId) {
+      console.log('Missing cityId or productId');
+      return res.status(400).json({ error: 'cityId and productId are required' });
+    }
+
+    const query = `
+      SELECT sl.store_id, s.name AS store_name, sl.latitude, sl.longitude
+      FROM store_locations sl
+      JOIN stores s ON sl.store_id = s.id
+      JOIN store_prices sp ON s.id = sp.store_id
+      WHERE sl.city_id = $1 AND sp.product_id = $2
+    `;
+    const values = [parseInt(cityId), parseInt(productId)];
+
+    const result = await pool.query(query, values);
+    console.log('Store locations fetched:', result.rows.length);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching store locations:', err.stack);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.get('/categories/public', async (req, res) => {
   try {
     console.log('Отримання категорій');
