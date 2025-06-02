@@ -1479,19 +1479,24 @@ app.get('/store-locations', async (req, res) => {
   try {
     console.log('Fetching store locations:', { cityId, productId });
 
-    if (!cityId || !productId) {
-      console.log('Missing cityId or productId');
-      return res.status(400).json({ error: 'cityId and productId are required' });
+    if (!productId) {
+      console.log('Missing productId');
+      return res.status(400).json({ error: 'productId is required' });
     }
 
-    const query = `
+    let query = `
       SELECT sl.store_id, s.name AS store_name, sl.latitude, sl.longitude
       FROM store_locations sl
       JOIN stores s ON sl.store_id = s.id
       JOIN store_prices sp ON s.id = sp.store_id
-      WHERE sl.city_id = $1 AND sp.product_id = $2
+      WHERE sp.product_id = $1
     `;
-    const values = [parseInt(cityId), parseInt(productId)];
+    const values = [parseInt(productId)];
+
+    if (cityId) {
+      query += ` AND sl.city_id = $2`;
+      values.push(parseInt(cityId));
+    }
 
     const result = await pool.query(query, values);
     console.log('Store locations fetched:', result.rows.length);
