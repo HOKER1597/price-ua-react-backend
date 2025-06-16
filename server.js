@@ -1415,9 +1415,19 @@ app.get('/products', async (req, res) => {
 
 app.get('/products/:id', async (req, res) => {
   const { id } = req.params;
+  const client = await pool.connect();
   try {
     console.log('Отримання деталей товару:', { id });
-    const result = await pool.query(`
+    await client.query('BEGIN');
+
+    // Increment views
+    await client.query(
+      `UPDATE products SET views = views + 1 WHERE id = $1`,
+      [id]
+    );
+    console.log('Кількість переглядів оновлено:', { id });
+
+    const result = await client.query(`
       SELECT p.id, p.name, p.volume, p.type, p.rating, p.views, p.code,
              c.id AS category_id, c.name_ua AS category_name, b.id AS brand_id, b.name AS brand_name,
              pd.description, pd.composition, pd.usage, pd.description_full,
@@ -1448,6 +1458,7 @@ app.get('/products/:id', async (req, res) => {
 
     if (result.rows.length === 0) {
       console.log('Продукт не знайдено:', { id });
+      await client.query('ROLLBACK');
       return res.status(404).send('Продукт не знайдено');
     }
 
@@ -1467,10 +1478,14 @@ app.get('/products/:id', async (req, res) => {
       }
     };
     console.log('Деталі товару отримано:', { id });
+    await client.query('COMMIT');
     res.json(product);
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('Помилка запиту /products/:id:', err.stack);
     res.status(500).send('Помилка сервера');
+  } finally {
+    client.release();
   }
 });
 
