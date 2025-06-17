@@ -72,7 +72,7 @@ const isAdmin = async (req, res, next) => {
 app.get('/cities', async (req, res) => {
   try {
     console.log('Отримання списку міст');
-    const result = await pool.query('SELECT id, name_ua, name_en FROM cities ORDER BY name_ua ASC');
+    const result = await pool.query('SELECT id, name_ua, name_en, latitude, longitude FROM cities ORDER BY name_ua ASC');
     console.log('Міста отримано:', result.rows.length);
     res.json(result.rows);
   } catch (err) {
