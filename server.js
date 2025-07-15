@@ -1500,7 +1500,8 @@ app.get('/store-locations', async (req, res) => {
     }
 
     let query = `
-      SELECT sl.store_id, s.name AS store_name, sl.latitude, sl.longitude
+      SELECT sl.id, sl.store_id, s.name AS store_name, sl.city_id, sl.latitude, sl.longitude, 
+             sl.address, sl.hours_mon_fri, sl.hours_sat, sl.hours_sun
       FROM store_locations sl
       JOIN stores s ON sl.store_id = s.id
       JOIN store_prices sp ON s.id = sp.store_id
@@ -1512,6 +1513,8 @@ app.get('/store-locations', async (req, res) => {
       query += ` AND sl.city_id = $2`;
       values.push(parseInt(cityId));
     }
+
+    query += ` ORDER BY sl.id ASC`;
 
     const result = await pool.query(query, values);
     console.log('Store locations fetched:', result.rows.length);
