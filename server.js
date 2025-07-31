@@ -1646,6 +1646,38 @@ app.post('/admin/store-location', authenticateToken, isAdmin, async (req, res) =
   }
 });
 
+app.get('/admin/store-location/last-hours', authenticateToken, isAdmin, async (req, res) => {
+  const { store_id, city_id } = req.query;
+  try {
+    console.log('Отримання останніх годин роботи для магазину та міста:', { store_id, city_id });
+
+    if (!store_id || !city_id) {
+      console.log('Відсутні store_id або city_id');
+      return res.status(400).json({ error: 'Потрібні store_id та city_id' });
+    }
+
+    const result = await pool.query(
+      `SELECT hours_mon_fri, hours_sat, hours_sun
+       FROM store_locations
+       WHERE store_id = $1 AND city_id = $2
+       ORDER BY id DESC
+       LIMIT 1`,
+      [parseInt(store_id), parseInt(city_id)]
+    );
+
+    if (result.rows.length === 0) {
+      console.log('Локацій для магазину та міста не знайдено:', { store_id, city_id });
+      return res.status(200).json({ hours_mon_fri: '', hours_sat: '', hours_sun: '' });
+    }
+
+    console.log('Останні години роботи отримано:', result.rows[0]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Помилка отримання годин роботи:', err.stack);
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
+
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
