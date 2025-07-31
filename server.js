@@ -1562,6 +1562,75 @@ app.get('/stores', async (req, res) => {
   }
 });
 
+app.post('/admin/store-location', authenticateToken, isAdmin, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    console.log('Початок створення локації магазину:', req.body);
+    await client.query('BEGIN');
+
+    const {
+      store_id,
+      city_id,
+      address,
+      latitude,
+      longitude,
+      hours_mon_fri,
+      hours_sat,
+      hours_sun,
+    } = req.body;
+
+    if (!store_id || !city_id || !address || !latitude || !longitude) {
+      console.log('Відсутні обов’язкові поля:', { store_id, city_id, address, latitude, longitude });
+      throw new Error('Магазин, місто, адреса, широта та довгота є обов’язковими');
+    }
+
+    const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store_id]);
+    if (storeCheck.rows.length === 0) {
+      console.log('Магазин не існує:', { store_id });
+      throw new Error(`Магазин з ID ${store_id} не існує`);
+    }
+
+    const cityCheck = await client.query('SELECT id FROM cities WHERE id = $1', [city_id]);
+    if (cityCheck.rows.length === 0) {
+      console.log('Місто не існує:', { city_id });
+      throw new Error(`Місто з ID ${city_id} не існує`);
+    }
+
+    const result = await client.query(
+      `INSERT INTO store_locations (store_id, city_id, address, latitude, longitude, hours_mon_fri, hours_sat, hours_sun)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, store_id, city_id, address, latitude, longitude, hours_mon_fri, hours_sat, hours_sun`,
+      [
+        store_id,
+        city_id,
+        address,
+        parseFloat(latitude),
+        parseFloat(longitude),
+        hours_mon_fri || null,
+        hours_sat || null,
+        hours_sun || null,
+      ]
+    );
+
+    await client.query('COMMIT');
+    console.log('Локацію магазину створено:', result.rows[0]);
+    res.json({ message: 'Локацію магазину успішно створено', location: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка створення локації магазину:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
+  }
+});
+
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
