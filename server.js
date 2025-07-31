@@ -1828,6 +1828,28 @@ app.get('/admin/store-location/:locationId', authenticateToken, isAdmin, async (
   }
 });
 
+app.get('/admin/store-locations', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    console.log('Отримання всіх локацій магазинів для адміна');
+    const result = await pool.query(`
+      SELECT sl.id, sl.store_id, s.name AS store_name, sl.city_id, c.name_ua AS city_name,
+             sl.latitude, sl.longitude, sl.address, 
+             sl.hours_mon_fri, sl.hours_sat, sl.hours_sun
+      FROM store_locations sl
+      JOIN stores s ON sl.store_id = s.id
+      JOIN cities c ON sl.city_id = c.id
+      ORDER BY sl.address ASC
+    `);
+    console.log('Локації отримано:', result.rows.length);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Помилка отримання локацій магазинів:', {
+      message: err.message,
+      stack: err.stack,
+    });
+    res.status(500).json({ error: 'Помилка сервера' });
+  }
+});
 
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
