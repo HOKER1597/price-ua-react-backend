@@ -1678,6 +1678,43 @@ app.get('/admin/store-location/last-hours', authenticateToken, isAdmin, async (r
   }
 });
 
+app.delete('/admin/store-location/:locationId', authenticateToken, isAdmin, async (req, res) => {
+  const { locationId } = req.params;
+  const client = await pool.connect();
+  try {
+    console.log('Початок видалення локації магазину:', { locationId });
+
+    await client.query('BEGIN');
+    console.log('Транзакцію розпочато');
+
+    const locationCheck = await client.query('SELECT id FROM store_locations WHERE id = $1', [locationId]);
+    if (locationCheck.rows.length === 0) {
+      console.log('Локація не існує:', { locationId });
+      throw new Error(`Локація з ID ${locationId} не існує`);
+    }
+
+    await client.query('DELETE FROM store_locations WHERE id = $1', [locationId]);
+    console.log('Локацію видалено з таблиці store_locations:', { locationId });
+
+    await client.query('COMMIT');
+    console.log('Транзакцію успішно завершено');
+    res.json({ message: 'Локацію магазину успішно видалено' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка видалення локації магазину:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    res.status(500).json({ error: err.message || 'Помилка сервера' });
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
+  }
+});
+
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
