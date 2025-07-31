@@ -1596,6 +1596,17 @@ app.post('/admin/store-location', authenticateToken, isAdmin, async (req, res) =
       throw new Error(`Місто з ID ${city_id} не існує`);
     }
 
+    // Синхронізація послідовності store_locations_id_seq
+    const maxIdResult = await client.query('SELECT MAX(id) FROM store_locations');
+    const maxId = maxIdResult.rows[0].max || 0;
+    console.log('Максимальний ID у store_locations:', { maxId });
+
+    await client.query(
+      "SELECT setval('store_locations_id_seq', COALESCE($1, 0) + 1, false)",
+      [maxId]
+    );
+    console.log('Послідовність store_locations_id_seq синхронізовано');
+
     const result = await client.query(
       `INSERT INTO store_locations (store_id, city_id, address, latitude, longitude, hours_mon_fri, hours_sat, hours_sun)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -1624,7 +1635,11 @@ app.post('/admin/store-location', authenticateToken, isAdmin, async (req, res) =
       constraint: err.constraint,
       detail: err.detail,
     });
-    res.status(500).json({ error: err.message || 'Помилка сервера' });
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Локація з такими даними вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
   } finally {
     client.release();
     console.log('Клієнт бази даних звільнено');
