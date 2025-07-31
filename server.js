@@ -1715,6 +1715,91 @@ app.delete('/admin/store-location/:locationId', authenticateToken, isAdmin, asyn
   }
 });
 
+app.put('/admin/store-location/:locationId', authenticateToken, isAdmin, async (req, res) => {
+  const { locationId } = req.params;
+  const client = await pool.connect();
+  try {
+    console.log('Початок оновлення локації магазину:', { locationId, body: req.body });
+
+    await client.query('BEGIN');
+    console.log('Транзакцію розпочато');
+
+    const {
+      store_id,
+      city_id,
+      address,
+      latitude,
+      longitude,
+      hours_mon_fri,
+      hours_sat,
+      hours_sun,
+    } = req.body;
+
+    if (!store_id || !city_id || !address || !latitude || !longitude) {
+      console.log('Відсутні обов’язкові поля:', { store_id, city_id, address, latitude, longitude });
+      throw new Error('Магазин, місто, адреса, широта та довгота є обов’язковими');
+    }
+
+    const locationCheck = await client.query('SELECT id FROM store_locations WHERE id = $1', [locationId]);
+    if (locationCheck.rows.length === 0) {
+      console.log('Локація не існує:', { locationId });
+      throw new Error(`Локація з ID ${locationId} не існує`);
+    }
+
+    const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [store_id]);
+    if (storeCheck.rows.length === 0) {
+      console.log('Магазин не існує:', { store_id });
+      throw new Error(`Магазин з ID ${store_id} не існує`);
+    }
+
+    const cityCheck = await client.query('SELECT id FROM cities WHERE id = $1', [city_id]);
+    if (cityCheck.rows.length === 0) {
+      console.log('Місто не існує:', { city_id });
+      throw new Error(`Місто з ID ${city_id} не існує`);
+    }
+
+    const result = await client.query(
+      `UPDATE store_locations
+       SET store_id = $1, city_id = $2, address = $3, latitude = $4, longitude = $5,
+           hours_mon_fri = $6, hours_sat = $7, hours_sun = $8
+       WHERE id = $9
+       RETURNING id, store_id, city_id, address, latitude, longitude, hours_mon_fri, hours_sat, hours_sun`,
+      [
+        store_id,
+        city_id,
+        address,
+        parseFloat(latitude),
+        parseFloat(longitude),
+        hours_mon_fri || null,
+        hours_sat || null,
+        hours_sun || null,
+        locationId,
+      ]
+    );
+
+    await client.query('COMMIT');
+    console.log('Локацію оновлено:', result.rows[0]);
+    res.json({ message: 'Локацію магазину успішно оновлено', location: result.rows[0] });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Помилка оновлення локації магазину:', {
+      message: err.message,
+      stack: err.stack,
+      code: err.code,
+      constraint: err.constraint,
+      detail: err.detail,
+    });
+    if (err.code === '23505') {
+      res.status(400).json({ error: 'Локація з такими даними вже існує' });
+    } else {
+      res.status(500).json({ error: err.message || 'Помилка сервера' });
+    }
+  } finally {
+    client.release();
+    console.log('Клієнт бази даних звільнено');
+  }
+});
+
 app.post('/upload-image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
